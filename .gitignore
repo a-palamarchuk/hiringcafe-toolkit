@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration (copy from the matching *.example.toml)
+config/*.toml
+!config/*.example.toml
+
+# Local search definitions (contain personal search parameters)
+config/searchstates/*.json
+!config/searchstates/*.example.json
+
+# Generated datasets (directory structure tracked via .gitkeep, contents ignored)
+data/company_discovery/raw/*
+data/company_discovery/interim/*
+data/company_discovery/processed/*
+data/job_shortlist/raw/*
+data/job_shortlist/interim/*
+data/job_shortlist/processed/*
+
+# Local inputs (the VisitLogger export is personal browsing history)
+data/inputs/*
+
+!data/**/.gitkeep
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+*~

@@ -1,0 +1,14 @@
+# Copy to company_discovery.toml (gitignored) and fill in real values.
+
+[search]
+# The search itself is NOT defined here. Build it in the hiring.cafe UI, copy
+# the searchState parameter out of the page URL, URL-decode it, and save it as
+# JSON. This file only points at it. Relative paths resolve against this file.
+searchstate_path = "searchstates/local-30mi.json"
+
+[scrape]
+# Seconds between page requests. Keep a real delay: this is an undocumented
+# internal API and the point is to be an unremarkable client, not a fast one.
+delay_seconds = 1.0
+# Safety ceiling on pages per run. A run that hits it did not finish.
+max_pages = 500

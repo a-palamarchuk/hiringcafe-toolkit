@@ -1,0 +1,30 @@
+{
+  "locations": [
+    {
+      "id": "us-zip-00000",
+      "postal_code": "00000",
+      "types": ["postal_code"],
+      "formatted_address": "Anytown, ST, US",
+      "address_components": [
+        {"long_name": "00000", "short_name": "00000", "types": ["postal_code"]},
+        {"long_name": "Anytown", "short_name": "Anytown", "types": ["locality"]},
+        {"long_name": "State", "short_name": "ST", "types": ["administrative_area_level_1"]},
+        {"long_name": "United States", "short_name": "US", "types": ["country"]}
+      ],
+      "geometry": {"location": {"lat": 0.0, "lon": 0.0}},
+      "postal_code_source": "geonames",
+      "workplace_types": ["Hybrid", "Onsite", "Remote"],
+      "options": {"radius": 30, "radius_unit": "miles", "ignore_radius": false}
+    }
+  ],
+  "commitmentTypes": ["Full Time"],
+  "dateFetchedPastNDays": -1,
+  "departments": [
+    "Engineering",
+    "Software Development",
+    "Information Technology",
+    "Data and Analytics",
+    "Research and Development (R&D)"
+  ],
+  "securityClearances": ["None", "Public Trust", "Other"]
+}
