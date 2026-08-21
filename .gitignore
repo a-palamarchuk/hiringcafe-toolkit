@@ -37,8 +37,7 @@ data/inputs/*
 !data/**/.gitkeep
 
 # Editors / OS
+*~
 .DS_Store
 .idea/
 .vscode/
-
-*~

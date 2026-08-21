@@ -21,6 +21,27 @@ searchstate_path = "searchstates/local.json"
 [scrape]
 delay_seconds = 2.5
 max_pages = 42
+
+[home]
+latitude = 38.9531
+longitude = -77.4565
+
+[location]
+radius_miles = 25
+excluded_states = ["Maryland"]
+
+[filters]
+excluded_sources = ["usagov"]
+excluded_website_tlds = [".gov"]
+"""
+
+MINIMAL_CONFIG = """
+[search]
+searchstate_path = "s.json"
+
+[home]
+latitude = 38.9531
+longitude = -77.4565
 """
 
 
@@ -36,21 +57,34 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
 
     assert settings.scrape.delay_seconds == 2.5
     assert settings.scrape.max_pages == 42
+    assert settings.home.latitude == 38.9531
+    assert settings.home.longitude == -77.4565
+    assert settings.rollup.radius_miles == 25.0
+    assert settings.rollup.excluded_states == ("Maryland",)
+    assert settings.rollup.excluded_sources == ("usagov",)
+    assert settings.rollup.excluded_website_tlds == (".gov",)
     # Relative searchState paths resolve against the config file, not the cwd.
     assert settings.searchstate_path == (tmp_path / "config" / "searchstates" / "local.json")
 
 
-def test_load_config_applies_defaults_when_scrape_section_absent(tmp_path: Path) -> None:
-    config_path = write(tmp_path / "c.toml", '[search]\nsearchstate_path = "s.json"\n')
+def test_load_config_applies_defaults_for_optional_sections(tmp_path: Path) -> None:
+    config_path = write(tmp_path / "c.toml", MINIMAL_CONFIG)
     settings = load_company_discovery_config(config_path)
 
     assert settings.scrape.delay_seconds == 1.0
     assert settings.scrape.max_pages == 500
+    assert settings.rollup.radius_miles == 30.0
+    assert settings.rollup.excluded_states == ()
+    assert settings.rollup.excluded_sources == ()
+    assert settings.rollup.excluded_website_tlds == ()
 
 
 def test_load_config_keeps_absolute_searchstate_path(tmp_path: Path) -> None:
     absolute = tmp_path / "elsewhere" / "s.json"
-    config_path = write(tmp_path / "c.toml", f'[search]\nsearchstate_path = "{absolute}"\n')
+    config_path = write(
+        tmp_path / "c.toml",
+        f'[search]\nsearchstate_path = "{absolute}"\n[home]\nlatitude = 38.7\nlongitude = -77.3\n',
+    )
 
     assert load_company_discovery_config(config_path).searchstate_path == absolute
 
@@ -60,8 +94,13 @@ def test_load_config_keeps_absolute_searchstate_path(tmp_path: Path) -> None:
     [
         ("[scrape]\nmax_pages = 5\n", "missing required \\[search\\]"),
         ('[search]\nsearchstate_path = ""\n', "non-empty string"),
-        ('[search]\nsearchstate_path = "s.json"\n[scrape]\ndelay_seconds = -1\n', "non-negative"),
-        ('[search]\nsearchstate_path = "s.json"\n[scrape]\nmax_pages = 0\n', "positive integer"),
+        ('[search]\nsearchstate_path = "s.json"\n', "missing required \\[home\\]"),
+        (MINIMAL_CONFIG + "[scrape]\ndelay_seconds = -1\n", "non-negative"),
+        (MINIMAL_CONFIG + "[scrape]\nmax_pages = 0\n", "positive integer"),
+        (MINIMAL_CONFIG + "[location]\nradius_miles = -5\n", "must be >= 0"),
+        (MINIMAL_CONFIG + '[location]\nexcluded_states = "Maryland"\n', "list of strings"),
+        (MINIMAL_CONFIG + "[filters]\nexcluded_sources = [1]\n", "list of strings"),
+        ('[search]\nsearchstate_path = "s.json"\n[home]\nlatitude = 100\nlongitude = 0\n', "<= 90"),
         ("[search\n", "invalid TOML"),
     ],
 )

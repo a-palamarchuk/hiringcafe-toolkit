@@ -19,10 +19,13 @@ from hiringcafe_toolkit.common.config import (
     load_company_discovery_config,
     load_search_state,
 )
+from hiringcafe_toolkit.common.jsonl import read_jsonl
+from hiringcafe_toolkit.company_discovery.rollup import RollupOptions, run_rollup
 from hiringcafe_toolkit.company_discovery.scrape import run_scrape
 
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
+DEFAULT_INTERIM_DIR = Path("data/company_discovery/interim")
 
 app = typer.Typer(
     help="Personal hiring.cafe scraping and processing toolkit.", no_args_is_help=True
@@ -39,6 +42,19 @@ job_shortlist_app = typer.Typer(
 
 app.add_typer(company_discovery_app, name="company-discovery")
 app.add_typer(job_shortlist_app, name="job-shortlist")
+
+
+def _newest(directory: Path, pattern: str) -> Path:
+    """Most recently modified matching file, so stages chain without paths."""
+    matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not matches:
+        typer.secho(
+            f"No files matching {pattern} in {directory}. Run the previous stage first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return matches[0]
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -94,6 +110,54 @@ def company_discovery_scrape(
     typer.echo(f"Stopped:  {result.stop_reason}")
     for key, value in sorted(result.reported_totals.items()):
         typer.echo(f"Reported: {key} = {value:g}")
+
+
+@company_discovery_app.command("rollup")
+def company_discovery_rollup(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = DEFAULT_CONFIG_PATH,
+    jobs: Annotated[
+        Path | None,
+        typer.Option("--jobs", "-j", help="Raw JSONL to roll up. Defaults to the newest."),
+    ] = None,
+    raw_dir: Annotated[
+        Path, typer.Option("--raw-dir", help="Where to look for raw scrape output.")
+    ] = DEFAULT_RAW_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for rolled-up output.")
+    ] = DEFAULT_INTERIM_DIR,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Aggregate raw postings into one record per company."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_company_discovery_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    jobs_path = jobs if jobs is not None else _newest(raw_dir, "jobs-*.jsonl")
+    typer.echo(f"Source: {jobs_path}")
+
+    options = RollupOptions(
+        home_latitude=settings.home.latitude,
+        home_longitude=settings.home.longitude,
+        radius_miles=settings.rollup.radius_miles,
+        excluded_states=settings.rollup.excluded_states,
+        excluded_sources=settings.rollup.excluded_sources,
+        excluded_website_tlds=settings.rollup.excluded_website_tlds,
+    )
+    result = run_rollup(read_jsonl(jobs_path), out_dir, options, source_path=jobs_path)
+
+    typer.echo("")
+    typer.echo(f"Companies:   {result.companies_path} ({result.company_count})")
+    typer.echo(f"No website:  {result.tail_path} ({result.tail_count})")
+    typer.echo(f"Meta:        {result.meta_path}")
+    typer.echo("")
+    for key in sorted(result.stats):
+        typer.echo(f"  {key}: {result.stats[key]}")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ dev = [
     "mypy>=1.11",
     "pre-commit>=3.7",
 ]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hiringcafe_toolkit"]
 

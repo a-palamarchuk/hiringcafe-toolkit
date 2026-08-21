@@ -1,0 +1,210 @@
+"""Deriving a company's careers page from a posting's apply URL.
+
+Records point at individual job postings, but the useful thing to visit is the
+employer's board, which lists everything they have open. There is no field for
+it, so it is derived from ``apply_url`` and ``source``.
+
+ATS URL shapes fall into three tiers:
+
+``HOST``
+    The host itself identifies the employer (``niyamit.bamboohr.com``,
+    ``careers-iridium.icims.com``, ``jobs.dish.com``). Trimming to the host
+    root lands on their board. This is also the default for unrecognized
+    sources, which is why a long tail of one-off ATSes is manageable.
+
+``HOST_AND_SEGMENTS``
+    The employer is a path segment (``job-boards.greenhouse.io/ionq``,
+    ``jobs.lever.co/agile-defense``). Trimming to the host would land on the
+    ATS vendor's own site, so a fixed number of path segments is kept.
+
+``BOARD``
+    The employer is identified by a query parameter, but the vendor's board
+    URL can be rebuilt from it by keeping the employer parameter, dropping the
+    job-specific ones, and (for some vendors) swapping the detail path for the
+    listing path. ADP's ``cid`` and Paycom's ``clientkey`` work this way.
+
+``POSTING``
+    Same situation, but with no reliable way to rebuild the listing URL, so the
+    posting URL is used as-is: one extra click to reach the employer's board,
+    versus a link that goes nowhere useful.
+
+Every result is a heuristic that can 404, which is why the rendered output
+keeps the company website as a fallback link.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+class DerivationTier(StrEnum):
+    """How a careers link was derived, recorded for run diagnostics."""
+
+    HOST = "host"
+    HOST_AND_SEGMENTS = "host_and_segments"
+    BOARD = "board"
+    POSTING = "posting"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class CareersLink:
+    url: str | None
+    tier: DerivationTier
+
+
+#: Sources whose employer identity lives in the URL path, with the number of
+#: path segments to keep after the host.
+PATH_SEGMENT_SOURCES: dict[str, int] = {
+    "grnhse": 1,  # job-boards.greenhouse.io/ionq
+    "lever": 1,  # jobs.lever.co/agile-defense
+    "eu_lever": 1,  # jobs.eu.lever.co/everseen
+    "ashby": 1,  # jobs.ashbyhq.com/allwyn-corp
+    "smartrecruiters": 1,  # jobs.smartrecruiters.com/TimmonsGroup1
+    "workday": 1,  # aero.wd5.myworkdayjobs.com/external
+    "rippling": 1,  # ats.rippling.com/imagineeer
+    "gem": 1,  # jobs.gem.com/bohler-
+    "harri": 1,  # harri.com/cavagroup
+    "recooty": 1,  # careerspage.io/welo-data
+    "dover": 1,  # app.dover.com/apply/<company-uuid>
+    "hireology": 1,  # careers.hireology.com/arlodc
+    "governmentjobs": 2,  # www.governmentjobs.com/careers/pwcgov
+    "jobvite": 1,  # jobs.jobvite.com/pinnaclelive
+    "adprecruiting": 1,  # myjobs.adp.com/bessemer
+    "gr8people": 0,  # troweprice.gr8people.com - host carries the company
+    "silkroad": 2,  # jobs.silkroad.com/JMT/JMTCareers
+    "dayforce": 2,  # jobs.dayforcehcm.com/en-US/hendersonco
+    "jobscore": 2,  # careers.jobscore.com/careers/cinqcare
+    "talentreef": 2,  # apply.jobappnetwork.com/clients/14459
+    "csod": 1,  # mathematica.csod.com/ux - host also works, keep it shallow
+    "vivahr": 1,  # jobs.avahr.com/40903-rjit-solutions
+    "gusto": 0,  # jobs.gusto.com/postings/<company>-<role>-<uuid>: not separable
+    "workable": 0,  # jobs.workable.com/view/<id>/...: not separable
+    "interfolio": 0,  # apply.interfolio.com/<id>: not separable
+    "appone_api": 0,  # apply.appone.com/job/<id>: not separable
+    "ourcareerpages": 0,  # jobs.ourcareerpages.com/job/<id>: not separable
+    "schoolspring": 0,
+}
+
+
+@dataclass(frozen=True)
+class BoardRule:
+    """How to rebuild a vendor's job-list URL from a posting URL."""
+
+    keep_params: frozenset[str]
+    """Query parameters that identify the employer. Everything else is dropped,
+    which is what removes the job id."""
+
+    path: str | None = None
+    """Replacement path, when the vendor serves listings from a different one
+    than job details."""
+
+    set_params: tuple[tuple[str, str], ...] = ()
+    """Extra parameters the listing view needs."""
+
+    path_suffix_replace: tuple[str, str] | None = None
+    """Swap the final path element, for vendors that keep a deep path and only
+    change the last segment between detail and listing views."""
+
+
+#: Query-parameter ATSes whose board URL can be rebuilt from the posting URL.
+#: These are heuristics against observed URL shapes, so the company website
+#: remains the fallback link when one misses.
+BOARD_QUERY_SOURCES: dict[str, BoardRule] = {
+    # .../recruitment.html?cid=<employer>&ccId=...&jobId=... -> drop jobId
+    "adp": BoardRule(keep_params=frozenset({"cid", "ccId"})),
+    # .../jobs/ViewJobDetails?job=...&clientkey=<employer> -> .../jobs
+    "paycom": BoardRule(keep_params=frozenset({"clientkey"}), path="/v4/ats/web.php/jobs"),
+    # /career/JobIntroduction.action?clientId=<employer>&id=... -> CareerHome
+    "paycor": BoardRule(keep_params=frozenset({"clientId"}), path="/career/CareerHome.action"),
+    # /ta/<employer>.careers?ShowJob=... -> the same page without ShowJob
+    "saashr": BoardRule(keep_params=frozenset()),
+    # .../requisition.jsp?org=<employer>&cws=...&rid=... -> jobSearch.jsp
+    "taleo_rss": BoardRule(
+        keep_params=frozenset({"org", "cws"}),
+        path_suffix_replace=("requisition.jsp", "jobSearch.jsp"),
+    ),
+}
+
+#: Sources where the employer is identified only by a query parameter, so no
+#: host- or path-level trim isolates their board.
+POSTING_URL_SOURCES: frozenset[str] = frozenset(
+    {
+        "brassring",  # sjobs.brassring.com/...?partnerid=...&siteid=...
+        "hirebridge",  # recruit.hirebridge.com/...?cid=...
+        "appone_rss",  # www.appone.com/MainInfoReq.asp?...&B_ID=...
+        "njoyn",  # clients.njoyn.com/CORP/xweb/xweb.asp?CLID=...
+        "virecruit",  # .../viRecruitSelfApply/RecDefault.aspx?Tag=...
+        "brightmove",  # portal.brightmove.com/jb.do?companyGK=...
+        "pereless",  # ...index.cfm?cid=...
+        "peoplematter",  # api.peoplematter.com/...?jobOpeningId=...
+        "csodsaba",  # emea3.recruitmentplatform.com/apply-app/...?jobId=...
+        "appvault",  # portal.appvault.com/<co>/job/<id>/...?category=...
+        "pageup",  # careers.pageuppeople.com/863/cw/en/job/<id>
+        "winocular",  # jobs.pwcs.edu/workspace/wSpace.exe?Action=...
+        "oraclepeoplesoft",  # careers.dc.gov/psc/...?JobOpeningId=...
+        "oraclecloud",  # <tenant>.fa.<dc>.oraclecloud.com/hcmUI/...
+        "salesforce",  # <tenant>.my.salesforce-sites.com/...?jobId=...
+        "paradox",  # <tenant>.paradox.ai/co/<Co>/Job?job_id=...
+    }
+)
+
+
+def _host_root(parts: tuple[str, str, str, str, str]) -> str:
+    scheme, netloc = parts[0], parts[1]
+    return urlunsplit((scheme or "https", netloc, "/", "", ""))
+
+
+def _apply_board_rule(split: SplitResult, rule: BoardRule) -> str:
+    """Rebuild a vendor listing URL from a posting URL."""
+    path = split.path
+    if rule.path is not None:
+        path = rule.path
+    elif rule.path_suffix_replace is not None:
+        old, new = rule.path_suffix_replace
+        if path.endswith(old):
+            path = path[: -len(old)] + new
+
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(split.query, keep_blank_values=False)
+        if key in rule.keep_params
+    ]
+    kept.extend(rule.set_params)
+    return urlunsplit((split.scheme, split.netloc, path, urlencode(kept), ""))
+
+
+def derive_careers_link(apply_url: str | None, source: str | None) -> CareersLink:
+    """Best-effort careers-page URL for the employer behind a posting."""
+    if not apply_url:
+        return CareersLink(None, DerivationTier.NONE)
+
+    split = urlsplit(apply_url.strip())
+    if not split.netloc or split.scheme not in {"http", "https"}:
+        return CareersLink(None, DerivationTier.NONE)
+
+    parts = (split.scheme, split.netloc, split.path, split.query, split.fragment)
+    key = (source or "").strip().lower()
+
+    board_rule = BOARD_QUERY_SOURCES.get(key)
+    if board_rule is not None:
+        return CareersLink(_apply_board_rule(split, board_rule), DerivationTier.BOARD)
+
+    if key in POSTING_URL_SOURCES:
+        return CareersLink(apply_url, DerivationTier.POSTING)
+
+    segments_to_keep = PATH_SEGMENT_SOURCES.get(key)
+    if segments_to_keep:
+        segments = [segment for segment in split.path.split("/") if segment]
+        if len(segments) >= segments_to_keep:
+            kept = "/".join(segments[:segments_to_keep])
+            return CareersLink(
+                urlunsplit((split.scheme, split.netloc, f"/{kept}/", "", "")),
+                DerivationTier.HOST_AND_SEGMENTS,
+            )
+
+    # Default, and the explicit choice for sources mapped to zero segments:
+    # the host identifies the employer.
+    return CareersLink(_host_root(parts), DerivationTier.HOST)

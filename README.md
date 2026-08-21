@@ -123,7 +123,43 @@ After a run, check `meta-*.json` before trusting the results:
   actually retrieved. Pagination can thin out before the reported total is reached; when that
   matters, split the search into narrower ones.
 
-Later stages (rollup, filter, render) are not implemented yet.
+### Stage 2: rollup
+
+```bash
+uv run hiringcafe-toolkit company-discovery rollup
+```
+
+Aggregates the newest raw scrape into one record per company, writing to
+`data/company_discovery/interim/`:
+
+| File | Contents |
+|---|---|
+| `companies-<timestamp>.jsonl` | One company per line: name, website, careers link, distance, locations, posting counts, sample titles |
+| `companies-no-website-<timestamp>.jsonl` | Companies with no usable website, which cannot be deduplicated against a visit log recorded by domain |
+| `rollup-meta-<timestamp>.json` | Drop counts by reason, careers-link derivation coverage, and a diagnostic listing domains that mapped to more than one company name |
+
+What it drops, and why:
+
+- **Excluded sources.** Public-sector boards are agencies, counties, and school districts rather
+  than companies with a career page worth reviewing.
+- **Postings with no qualifying location.** The scrape matches a posting if *any* of its
+  locations is in range, so a posting listing College Park and Boulder can arrive with neither
+  near home. Each workplace city is re-checked against the radius and the excluded states, and
+  the posting survives only if one qualifies. A posting listing both an excluded state and a
+  nearby city is kept, on the strength of the nearby one.
+- **Public-sector and university domains.** Source exclusion cannot catch an agency or
+  university that uses a mainstream ATS, so `.gov`, `.mil`, and `.edu` websites are excluded by
+  domain as well.
+- **Expired postings.**
+
+Postings with no location data at all are kept, with an unknown distance, rather than dropped on
+missing evidence.
+
+The `ambiguous_domains` diagnostic is worth a glance after each run: it lists website hosts that
+resolved to more than one company name, which is how a wrong merge (subsidiaries sharing a
+domain) would show up.
+
+Later stages (filter, render) are not implemented yet.
 
 ## License
 

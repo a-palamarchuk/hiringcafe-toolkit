@@ -12,3 +12,36 @@ searchstate_path = "searchstates/local-30mi.json"
 delay_seconds = 1.0
 # Safety ceiling on pages per run. A run that hits it did not finish.
 max_pages = 500
+
+# Distances are measured from here. Required: without it a distance column
+# would silently be measured from somewhere meaningless.
+[home]
+latitude = 0.0
+longitude = 0.0
+
+[location]
+# Re-checked locally during rollup. A scraped posting matched on *any* of its
+# locations, which may be nowhere near home, so the radius is applied again
+# per workplace city.
+radius_miles = 30
+# A posting survives if at least one of its in-radius cities is outside these
+# states, so a company with both a nearby office and an excluded one is kept.
+# Full state names, matching the form the records use.
+excluded_states = []
+
+[filters]
+# ATS sources dropped entirely. Public-sector boards belong here: they are
+# government agencies, school districts, and counties rather than companies
+# with a career page worth reviewing.
+excluded_sources = [
+    "usagov",
+    "governmentjobs",
+    "winocular",
+    "schoolspring",
+    "peopleadmin",
+    "oraclepeoplesoft",
+]
+# Company website suffixes dropped regardless of ATS. Source exclusion cannot
+# catch an agency, county, or university that uses a mainstream ATS, so their
+# domains are excluded too.
+excluded_website_tlds = [".mil", ".gov", ".edu"]
