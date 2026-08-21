@@ -16,14 +16,28 @@ from hiringcafe_toolkit.company_discovery.rollup import (
     run_rollup,
 )
 from hiringcafe_toolkit.company_discovery.scrape import ScrapeResult, run_scrape
+from hiringcafe_toolkit.company_discovery.visited_filter import (
+    FilterResult,
+    VisitLog,
+    VisitLogError,
+    filter_companies,
+    load_visit_log,
+    run_filter,
+)
 
 __all__ = [
     "CareersLink",
     "DerivationTier",
+    "FilterResult",
     "RollupOptions",
     "RollupResult",
     "ScrapeResult",
+    "VisitLog",
+    "VisitLogError",
     "derive_careers_link",
+    "filter_companies",
+    "load_visit_log",
+    "run_filter",
     "rollup_records",
     "run_rollup",
     "run_scrape",

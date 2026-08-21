@@ -45,3 +45,9 @@ excluded_sources = [
 # catch an agency, county, or university that uses a mainstream ATS, so their
 # domains are excluded too.
 excluded_website_tlds = [".mil", ".gov", ".edu"]
+
+[visit_logger]
+# JSON export from the VisitLogger browser extension, keyed by website host.
+# Companies whose site appears there are dropped during the filter stage.
+# Relative paths resolve against this file.
+export_path = "../data/inputs/visitlogger-export.json"

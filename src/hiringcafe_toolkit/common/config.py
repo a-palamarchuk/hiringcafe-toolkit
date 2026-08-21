@@ -70,6 +70,7 @@ class CompanyDiscoveryConfig:
     scrape: ScrapeSettings
     home: HomeLocation
     rollup: RollupSettings
+    visit_log_path: Path | None = None
 
 
 def _require_table(data: dict[str, Any], key: str, source: Path) -> dict[str, Any]:
@@ -108,6 +109,18 @@ def _string_tuple(table: dict[str, Any], key: str, source: Path, section: str) -
     return tuple(item for item in value if item.strip())
 
 
+def _resolve(raw: str, config_path: Path) -> Path:
+    """Resolve a configured path against the config file.
+
+    Relative paths resolve against the config rather than the working
+    directory, so the CLI behaves the same from anywhere.
+    """
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    return (config_path.parent / candidate).resolve()
+
+
 def _read_toml(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as handle:
@@ -129,11 +142,7 @@ def load_company_discovery_config(path: Path) -> CompanyDiscoveryConfig:
     if not isinstance(raw_state_path, str) or not raw_state_path:
         raise ConfigError(f"{path}: [search].searchstate_path must be a non-empty string")
 
-    # Relative paths resolve against the config file, so a config can be run
-    # from any working directory.
-    state_path = Path(raw_state_path)
-    if not state_path.is_absolute():
-        state_path = (path.parent / state_path).resolve()
+    state_path = _resolve(raw_state_path, path)
 
     scrape_table = data.get("scrape", {})
     if not isinstance(scrape_table, dict):
@@ -175,8 +184,17 @@ def load_company_discovery_config(path: Path) -> CompanyDiscoveryConfig:
         ),
     )
 
+    visit_logger_table = data.get("visit_logger", {})
+    if not isinstance(visit_logger_table, dict):
+        raise ConfigError(f"{path}: [visit_logger] must be a table")
+    raw_visit_log = visit_logger_table.get("export_path")
+    if raw_visit_log is not None and not isinstance(raw_visit_log, str):
+        raise ConfigError(f"{path}: [visit_logger].export_path must be a string")
+    visit_log_path = _resolve(raw_visit_log, path) if raw_visit_log else None
+
     return CompanyDiscoveryConfig(
         searchstate_path=state_path,
+        visit_log_path=visit_log_path,
         scrape=ScrapeSettings(delay_seconds=float(delay), max_pages=max_pages),
         home=home,
         rollup=rollup,

@@ -22,6 +22,11 @@ from hiringcafe_toolkit.common.config import (
 from hiringcafe_toolkit.common.jsonl import read_jsonl
 from hiringcafe_toolkit.company_discovery.rollup import RollupOptions, run_rollup
 from hiringcafe_toolkit.company_discovery.scrape import run_scrape
+from hiringcafe_toolkit.company_discovery.visited_filter import (
+    VisitLogError,
+    load_visit_log,
+    run_filter,
+)
 
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
@@ -55,6 +60,11 @@ def _newest(directory: Path, pattern: str) -> Path:
         )
         raise typer.Exit(code=2)
     return matches[0]
+
+
+def _newest_optional(directory: Path, pattern: str) -> Path | None:
+    matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -158,6 +168,80 @@ def company_discovery_rollup(
     typer.echo("")
     for key in sorted(result.stats):
         typer.echo(f"  {key}: {result.stats[key]}")
+
+
+@company_discovery_app.command("filter")
+def company_discovery_filter(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = DEFAULT_CONFIG_PATH,
+    companies: Annotated[
+        Path | None,
+        typer.Option("--companies", help="Rolled-up JSONL to filter. Defaults to the newest."),
+    ] = None,
+    visit_log: Annotated[
+        Path | None,
+        typer.Option("--visit-log", help="VisitLogger export. Defaults to the configured path."),
+    ] = None,
+    interim_dir: Annotated[
+        Path, typer.Option("--interim-dir", help="Where to look for rolled-up output.")
+    ] = DEFAULT_INTERIM_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for filtered output.")
+    ] = DEFAULT_INTERIM_DIR,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Drop companies whose site is already in the visit log."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_company_discovery_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    visit_log_path = visit_log if visit_log is not None else settings.visit_log_path
+    if visit_log_path is None:
+        typer.secho(
+            "No visit log. Set [visit_logger].export_path in the config or pass --visit-log.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    companies_path = (
+        companies if companies is not None else _newest(interim_dir, "companies-2*.jsonl")
+    )
+    tail_path = _newest_optional(interim_dir, "companies-no-website-*.jsonl")
+
+    try:
+        log = load_visit_log(visit_log_path)
+    except VisitLogError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"Companies: {companies_path}")
+    typer.echo(f"Visit log: {visit_log_path} ({len(log.hosts)} hosts)")
+    if log.unusable_keys:
+        typer.secho(
+            f"  {len(log.unusable_keys)} visit-log keys were not usable hosts",
+            fg=typer.colors.YELLOW,
+        )
+
+    result = run_filter(
+        read_jsonl(companies_path),
+        log,
+        out_dir,
+        tail=read_jsonl(tail_path) if tail_path else None,
+        source_path=companies_path,
+        visit_log_path=visit_log_path,
+    )
+
+    typer.echo("")
+    typer.echo(f"Remaining:  {result.remaining_path} ({result.kept})")
+    typer.echo(f"No website: {result.passthrough} passed through unfiltered")
+    typer.echo(f"Meta:       {result.meta_path}")
+    typer.echo(f"Excluded as already visited: {result.excluded}")
 
 
 if __name__ == "__main__":

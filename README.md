@@ -159,7 +159,35 @@ The `ambiguous_domains` diagnostic is worth a glance after each run: it lists we
 resolved to more than one company name, which is how a wrong merge (subsidiaries sharing a
 domain) would show up.
 
-Later stages (filter, render) are not implemented yet.
+### Stage 3: filter
+
+```bash
+uv run hiringcafe-toolkit company-discovery filter
+```
+
+Drops companies whose website already appears in the
+[VisitLogger](https://github.com/a-palamarchuk/visit-logger) export, writing to
+`data/company_discovery/interim/`:
+
+| File | Contents |
+|---|---|
+| `remaining-<timestamp>.jsonl` | Companies still worth a visit |
+| `remaining-no-website-<timestamp>.jsonl` | The website-less rows, passed through unfiltered |
+| `filter-meta-<timestamp>.json` | Counts, unusable visit-log keys, and a sample of what was excluded |
+
+Both the export keys and the company websites go through the same host normalization, so
+`www.Acme.com` in the log matches `acme.com` in the data.
+
+Rows without a company website cannot be filtered: they are keyed on an ATS URL, and marking one
+visited would record a host shared by thousands of unrelated employers. They pass through to
+their own file, which is why that file repeats in full on every run rather than shrinking as you
+work through it.
+
+The `excluded_sample` field in the meta is worth a glance on the first run: if host normalization
+ever breaks, it shows up there as obviously wrong matches rather than as a silently smaller
+output file.
+
+Later stages (render) are not implemented yet.
 
 ## License
 
