@@ -20,6 +20,7 @@ JsonDict = dict[str, Any]
 DEFAULT_DELAY_SECONDS = 1.0
 DEFAULT_MAX_PAGES = 500
 DEFAULT_RADIUS_MILES = 30.0
+DEFAULT_COMPRESS = True
 
 
 class ConfigError(Exception):
@@ -32,6 +33,9 @@ class ScrapeSettings:
 
     delay_seconds: float = DEFAULT_DELAY_SECONDS
     max_pages: int = DEFAULT_MAX_PAGES
+    compress: bool = DEFAULT_COMPRESS
+    """Gzip the raw records. Roughly 7x on this data, which matters once daily
+    runs are retained; the meta sidecar stays plain because it is read by eye."""
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,45 @@ def _string_tuple(table: dict[str, Any], key: str, source: Path, section: str) -
     return tuple(item for item in value if item.strip())
 
 
+def _require_bool(
+    table: dict[str, Any], key: str, default: bool, source: Path, section: str
+) -> bool:
+    value = table.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{source}: [{section}].{key} must be true or false")
+    return value
+
+
+def _scrape_settings(data: dict[str, Any], path: Path) -> ScrapeSettings:
+    """Parse the [scrape] table, which is identical across pipelines."""
+    table = data.get("scrape", {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [scrape] must be a table")
+
+    delay = table.get("delay_seconds", DEFAULT_DELAY_SECONDS)
+    if not isinstance(delay, (int, float)) or isinstance(delay, bool) or delay < 0:
+        raise ConfigError(f"{path}: [scrape].delay_seconds must be a non-negative number")
+
+    max_pages = table.get("max_pages", DEFAULT_MAX_PAGES)
+    if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1:
+        raise ConfigError(f"{path}: [scrape].max_pages must be a positive integer")
+
+    return ScrapeSettings(
+        delay_seconds=float(delay),
+        max_pages=max_pages,
+        compress=_require_bool(table, "compress", DEFAULT_COMPRESS, path, "scrape"),
+    )
+
+
+def _searchstate_path(data: dict[str, Any], path: Path) -> Path:
+    """Resolve [search].searchstate_path, required by every pipeline."""
+    search = _require_table(data, "search", path)
+    raw = search.get("searchstate_path")
+    if not isinstance(raw, str) or not raw:
+        raise ConfigError(f"{path}: [search].searchstate_path must be a non-empty string")
+    return _resolve(raw, path)
+
+
 def _resolve(raw: str, config_path: Path) -> Path:
     """Resolve a configured path against the config file.
 
@@ -137,24 +180,8 @@ def load_company_discovery_config(path: Path) -> CompanyDiscoveryConfig:
     """Load and validate ``config/company_discovery.toml``."""
     data = _read_toml(path)
 
-    search = _require_table(data, "search", path)
-    raw_state_path = search.get("searchstate_path")
-    if not isinstance(raw_state_path, str) or not raw_state_path:
-        raise ConfigError(f"{path}: [search].searchstate_path must be a non-empty string")
-
-    state_path = _resolve(raw_state_path, path)
-
-    scrape_table = data.get("scrape", {})
-    if not isinstance(scrape_table, dict):
-        raise ConfigError(f"{path}: [scrape] must be a table")
-
-    delay = scrape_table.get("delay_seconds", DEFAULT_DELAY_SECONDS)
-    if not isinstance(delay, (int, float)) or isinstance(delay, bool) or delay < 0:
-        raise ConfigError(f"{path}: [scrape].delay_seconds must be a non-negative number")
-
-    max_pages = scrape_table.get("max_pages", DEFAULT_MAX_PAGES)
-    if not isinstance(max_pages, int) or isinstance(max_pages, bool) or max_pages < 1:
-        raise ConfigError(f"{path}: [scrape].max_pages must be a positive integer")
+    state_path = _searchstate_path(data, path)
+    scrape = _scrape_settings(data, path)
 
     home_table = _require_table(data, "home", path)
     home = HomeLocation(
@@ -195,7 +222,7 @@ def load_company_discovery_config(path: Path) -> CompanyDiscoveryConfig:
     return CompanyDiscoveryConfig(
         searchstate_path=state_path,
         visit_log_path=visit_log_path,
-        scrape=ScrapeSettings(delay_seconds=float(delay), max_pages=max_pages),
+        scrape=scrape,
         home=home,
         rollup=rollup,
     )
@@ -216,3 +243,30 @@ def load_search_state(path: Path) -> JsonDict:
     if not parsed:
         raise ConfigError(f"{path}: searchState is empty; an unfiltered search is never intended")
     return parsed
+
+
+@dataclass(frozen=True)
+class JobShortlistConfig:
+    """Settings for the job-shortlist pipeline.
+
+    Deliberately smaller than the company-discovery config. There is no
+    ``[home]`` section because this pipeline does no distance work: the sample
+    showed every record from a 30-mile search already inside 30 miles, so a
+    local radius re-check would drop nothing. Company discovery needs it
+    because a posting there can match on a city nowhere near home.
+
+    Screening settings (compensation floor, company blocklist) arrive with the
+    screen stage rather than being declared before anything reads them.
+    """
+
+    searchstate_path: Path
+    scrape: ScrapeSettings
+
+
+def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
+    """Load and validate ``config/job_shortlist.toml``."""
+    data = _read_toml(path)
+    return JobShortlistConfig(
+        searchstate_path=_searchstate_path(data, path),
+        scrape=_scrape_settings(data, path),
+    )

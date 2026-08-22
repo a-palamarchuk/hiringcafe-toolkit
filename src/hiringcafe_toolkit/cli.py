@@ -18,12 +18,13 @@ from hiringcafe_toolkit.api import HiringCafeClient
 from hiringcafe_toolkit.common.config import (
     ConfigError,
     load_company_discovery_config,
+    load_job_shortlist_config,
     load_search_state,
 )
 from hiringcafe_toolkit.common.jsonl import read_jsonl
+from hiringcafe_toolkit.common.scrape import ScrapeResult, run_scrape
 from hiringcafe_toolkit.company_discovery.render import run_render
 from hiringcafe_toolkit.company_discovery.rollup import RollupOptions, run_rollup
-from hiringcafe_toolkit.company_discovery.scrape import run_scrape
 from hiringcafe_toolkit.company_discovery.visited_filter import (
     VisitLogError,
     load_visit_log,
@@ -34,6 +35,13 @@ DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
 DEFAULT_INTERIM_DIR = Path("data/company_discovery/interim")
 DEFAULT_PROCESSED_DIR = Path("data/company_discovery/processed")
+
+SHORTLIST_CONFIG_PATH = Path("config/job_shortlist.toml")
+SHORTLIST_RAW_DIR = Path("data/job_shortlist/raw")
+
+#: Raw scrape output may be gzipped or not; stages accept either, so lookups
+#: glob both rather than assuming whichever the last run happened to write.
+JOBS_GLOB = "jobs-*.jsonl*"
 
 app = typer.Typer(
     help="Personal hiring.cafe scraping and processing toolkit.", no_args_is_help=True
@@ -68,6 +76,22 @@ def _newest(directory: Path, pattern: str) -> Path:
 def _newest_optional(directory: Path, pattern: str) -> Path | None:
     matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
     return matches[0] if matches else None
+
+
+def _echo_scrape_result(result: ScrapeResult) -> None:
+    """Print the post-run summary. Identical for every pipeline."""
+    typer.echo("")
+    typer.echo(f"Records:  {result.jobs_path}")
+    typer.echo(f"Meta:     {result.meta_path}")
+    typer.echo(f"Unique:   {result.unique_records} over {result.pages_fetched} pages")
+    typer.echo(f"Stopped:  {result.stop_reason}")
+    for key, value in sorted(result.reported_totals.items()):
+        typer.echo(f"Reported: {key} = {value:g}")
+    if result.stop_reason.startswith("reached max_pages"):
+        typer.secho(
+            "  This run hit the page ceiling and did not finish. Re-run with a higher --max-pages.",
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -114,15 +138,10 @@ def company_discovery_scrape(
             client=client,
             max_pages=effective_max_pages,
             variant_name=settings.searchstate_path.stem,
+            compress=settings.scrape.compress,
         )
 
-    typer.echo("")
-    typer.echo(f"Records:  {result.jobs_path}")
-    typer.echo(f"Meta:     {result.meta_path}")
-    typer.echo(f"Unique:   {result.unique_records} over {result.pages_fetched} pages")
-    typer.echo(f"Stopped:  {result.stop_reason}")
-    for key, value in sorted(result.reported_totals.items()):
-        typer.echo(f"Reported: {key} = {value:g}")
+    _echo_scrape_result(result)
 
 
 @company_discovery_app.command("rollup")
@@ -151,7 +170,7 @@ def company_discovery_rollup(
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
 
-    jobs_path = jobs if jobs is not None else _newest(raw_dir, "jobs-*.jsonl")
+    jobs_path = jobs if jobs is not None else _newest(raw_dir, JOBS_GLOB)
     typer.echo(f"Source: {jobs_path}")
 
     options = RollupOptions(
@@ -294,6 +313,60 @@ def company_discovery_render(
             ),
         )
         typer.echo(f"No website: {tail_result.path} ({tail_result.rows} rows)")
+
+
+@job_shortlist_app.command("scrape")
+def job_shortlist_scrape(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for raw run output.")
+    ] = SHORTLIST_RAW_DIR,
+    max_pages: Annotated[
+        int | None, typer.Option("--max-pages", help="Override the config page ceiling.")
+    ] = None,
+    delay: Annotated[
+        float | None, typer.Option("--delay", help="Override seconds between page requests.")
+    ] = None,
+    no_compress: Annotated[
+        bool, typer.Option("--no-compress", help="Write raw records uncompressed.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Fetch raw job records for the configured shortlist search."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_job_shortlist_config(config)
+        search_state = load_search_state(settings.searchstate_path)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    effective_delay = delay if delay is not None else settings.scrape.delay_seconds
+    effective_max_pages = max_pages if max_pages is not None else settings.scrape.max_pages
+    compress = settings.scrape.compress and not no_compress
+
+    window = search_state.get("dateFetchedPastNDays")
+    typer.echo(f"searchState: {settings.searchstate_path}")
+    if isinstance(window, int):
+        # Surfaced because it is the parameter most likely to be wrong after a
+        # searchState is re-copied from the UI, and a too-narrow window loses
+        # postings that cannot be recovered on a later run.
+        typer.echo(f"Fetch window: {window} days")
+
+    with HiringCafeClient(delay_seconds=effective_delay) as client:
+        result = run_scrape(
+            search_state,
+            out_dir,
+            client=client,
+            max_pages=effective_max_pages,
+            variant_name=settings.searchstate_path.stem,
+            compress=compress,
+        )
+
+    _echo_scrape_result(result)
 
 
 if __name__ == "__main__":

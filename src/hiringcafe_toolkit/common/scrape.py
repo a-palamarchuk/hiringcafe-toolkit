@@ -1,8 +1,8 @@
-"""Stage 1 of company discovery: fetch raw job records.
+"""Fetch raw job records for a search. Shared by every pipeline.
 
 Writes two files per run:
 
-``jobs-<timestamp>.jsonl``
+``jobs-<timestamp>.jsonl[.gz]``
     One raw record per line, deduplicated by ``objectID`` across pages and
     otherwise untouched. Keeping the records verbatim means later stages can be
     rewritten and re-run without re-scraping.
@@ -10,9 +10,12 @@ Writes two files per run:
 ``meta-<timestamp>.json``
     Audit trail: the searchState used, per-page received/new counts, build ids,
     any totals the API reported, and the reason iteration stopped. This is what
-    tells you whether a run actually exhausted the result set.
+    tells you whether a run actually exhausted the result set. Left
+    uncompressed - it is small and read by eye after every run.
 
-Later stages read the JSONL; nothing downstream depends on the API.
+This module takes no view on what the records mean. Both pipelines scrape
+identically and diverge only afterwards, so this lives in ``common`` rather
+than being forked per pipeline.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from hiringcafe_toolkit.api import HiringCafeError, ResultPage, record_key
-from hiringcafe_toolkit.common.jsonl import JsonlWriter
+from hiringcafe_toolkit.common.jsonl import JsonlWriter, with_compression
 
 JsonDict = dict[str, Any]
 
@@ -72,11 +75,12 @@ def run_scrape(
     client: PageSource,
     max_pages: int,
     variant_name: str = "default",
+    compress: bool = True,
 ) -> ScrapeResult:
     """Scrape one search and write raw records plus a meta sidecar."""
     stamp = _timestamp()
     out_dir.mkdir(parents=True, exist_ok=True)
-    jobs_path = out_dir / f"jobs-{stamp}.jsonl"
+    jobs_path = with_compression(out_dir / f"jobs-{stamp}.jsonl", compress)
     meta_path = out_dir / f"meta-{stamp}.json"
 
     seen_keys: set[str] = set()
@@ -93,6 +97,8 @@ def run_scrape(
         "variant": variant_name,
         "searchState": dict(search_state),
         "max_pages": max_pages,
+        "jobs_file": jobs_path.name,
+        "compressed": compress,
         "pages": pages_meta,
         "build_ids": build_ids,
         "reported_totals": reported_totals,

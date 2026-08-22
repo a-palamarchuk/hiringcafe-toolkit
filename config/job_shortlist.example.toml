@@ -1,0 +1,24 @@
+# Copy to job_shortlist.toml (gitignored) and fill in real values.
+
+[search]
+# The search itself is NOT defined here. Build it in the hiring.cafe UI, copy
+# the searchState parameter out of the page URL, URL-decode it, and save it as
+# JSON. This file only points at it. Relative paths resolve against this file.
+#
+# For this pipeline, keep dateFetchedPastNDays at 21 ("2 weeks" in the UI, a
+# 21-day fetch window). The window is a missed-run recovery buffer, not a
+# freshness filter - freshness comes from the diff stage. Three weeks of slack
+# costs about a minute of scraping.
+searchstate_path = "searchstates/local-30mi-short.json"
+
+[scrape]
+# Seconds between page requests. Keep a real delay: this is an undocumented
+# internal API and the point is to be an unremarkable client, not a fast one.
+delay_seconds = 1.0
+# Safety ceiling on pages per run. A run that hits it did not finish.
+max_pages = 500
+# Gzip the raw records (~7x on this data). Unlike company discovery, this
+# pipeline runs daily and keeps every snapshot, so uncompressed raw output
+# reaches several GB within a year. Reading accepts both forms, so flipping
+# this off later does not strand existing files.
+compress = true

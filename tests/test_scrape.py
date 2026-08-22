@@ -1,4 +1,4 @@
-"""Tests for company-discovery stage 1.
+"""Tests for the shared scrape stage.
 
 The client is stubbed here: transport behavior is covered in
 test_api_client.py, so these focus on deduplication, stop conditions, and the
@@ -7,6 +7,7 @@ meta sidecar that tells you whether a run actually finished.
 
 from __future__ import annotations
 
+import gzip
 import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 
 from hiringcafe_toolkit.api.client import HiringCafeError, ResultPage
 from hiringcafe_toolkit.common.jsonl import read_jsonl
-from hiringcafe_toolkit.company_discovery.scrape import run_scrape
+from hiringcafe_toolkit.common.scrape import run_scrape
 
 JsonDict = dict[str, Any]
 
@@ -54,8 +55,10 @@ def read_meta(path: Path) -> JsonDict:
     return loaded
 
 
-def run(tmp_path: Path, client: Any, max_pages: int = 50) -> Any:
-    return run_scrape({"q": 1}, tmp_path, client=client, max_pages=max_pages)
+def run(tmp_path: Path, client: Any, max_pages: int = 50, compress: bool = False) -> Any:
+    # Defaults to uncompressed so the existing assertions read plain files;
+    # compression itself is covered explicitly below.
+    return run_scrape({"q": 1}, tmp_path, client=client, max_pages=max_pages, compress=compress)
 
 
 def test_records_are_written_verbatim_and_deduplicated(tmp_path: Path) -> None:
@@ -153,3 +156,41 @@ def test_output_directory_is_created(tmp_path: Path) -> None:
     result = run_scrape({"q": 1}, target, client=StubClient([page("ssr", "a")]), max_pages=1)
 
     assert result.jobs_path.parent == target
+
+
+# ----- compression -------------------------------------------------------
+
+
+def test_compressed_runs_write_a_gz_file_that_reads_back(tmp_path: Path) -> None:
+    result = run(tmp_path, StubClient([page("ssr", "a", "b")]), compress=True)
+
+    assert result.jobs_path.name.endswith(".jsonl.gz")
+    assert gzip.decompress(result.jobs_path.read_bytes()).startswith(b"{")
+    assert [record["objectID"] for record in read_jsonl(result.jobs_path)] == ["a", "b"]
+
+
+def test_uncompressed_runs_write_a_plain_file(tmp_path: Path) -> None:
+    result = run(tmp_path, StubClient([page("ssr", "a")]), compress=False)
+
+    assert result.jobs_path.suffix == ".jsonl"
+    assert result.jobs_path.read_text(encoding="utf-8").startswith("{")
+
+
+def test_meta_stays_plain_and_names_the_records_file(tmp_path: Path) -> None:
+    """The meta sidecar is read by eye after every run, so it is never gzipped."""
+    result = run(tmp_path, StubClient([page("ssr", "a")]), compress=True)
+
+    meta = read_meta(result.meta_path)
+    assert result.meta_path.suffix == ".json"
+    assert meta["compressed"] is True
+    assert meta["jobs_file"] == result.jobs_path.name
+
+
+def test_partial_compressed_output_survives_a_failure(tmp_path: Path) -> None:
+    """A gzip flush is a sync point, so an aborted run still decompresses."""
+    client = StubClient([page("ssr", "a")], error=HiringCafeError("boom"))
+    with pytest.raises(HiringCafeError):
+        run(tmp_path, client, compress=True)
+
+    written = sorted(tmp_path.glob("jobs-*.jsonl.gz"))
+    assert [record["objectID"] for record in read_jsonl(written[0])] == ["a"]

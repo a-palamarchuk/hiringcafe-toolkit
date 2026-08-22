@@ -1,5 +1,8 @@
 """Company-discovery pipeline: Scrape -> Rollup -> Filter -> Render.
 
+The scrape stage itself is not here: it is identical for every pipeline and
+lives in ``common.scrape``.
+
 Discovers companies with nearby engineering openings and produces a list of
 career pages to visit, rather than matching individual job postings.
 """
@@ -21,7 +24,6 @@ from hiringcafe_toolkit.company_discovery.rollup import (
     rollup_records,
     run_rollup,
 )
-from hiringcafe_toolkit.company_discovery.scrape import ScrapeResult, run_scrape
 from hiringcafe_toolkit.company_discovery.visited_filter import (
     FilterResult,
     VisitLog,
@@ -38,7 +40,6 @@ __all__ = [
     "RenderResult",
     "RollupOptions",
     "RollupResult",
-    "ScrapeResult",
     "VisitLog",
     "VisitLogError",
     "derive_careers_link",
@@ -50,5 +51,4 @@ __all__ = [
     "sort_companies",
     "rollup_records",
     "run_rollup",
-    "run_scrape",
 ]

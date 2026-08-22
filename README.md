@@ -16,8 +16,10 @@ glance while a false negative costs a company you never hear about.
 **Job shortlist** asks *what was posted today that I should apply to?* The unit is the posting,
 filters are tight, and the run is daily.
 
-Both read the same API, so the client and shared helpers live in `api/` and `common/`, while
-each pipeline keeps its own stages and lifecycle.
+Both read the same API, so the client, the scrape stage, and shared helpers live in `api/` and
+`common/`, while each pipeline keeps its own later stages and lifecycle. Scraping is identical
+either way - fetch pages, deduplicate by `objectID`, write raw records and a meta sidecar - so
+the pipelines diverge only after the raw data lands.
 
 ## Project layout
 
@@ -25,7 +27,7 @@ each pipeline keeps its own stages and lifecycle.
 hiringcafe-toolkit/
 ├── src/hiringcafe_toolkit/
 │   ├── api/                   # hiring.cafe API client, shared across pipelines
-│   ├── common/                # config loading, serialization, shared models
+│   ├── common/                # config loading, serialization, scrape stage, shared models
 │   ├── company_discovery/     # Scrape -> Rollup -> Filter -> Render career-page discovery
 │   ├── job_shortlist/         # Daily scrape and shortlist of new job postings
 │   └── cli.py                 # `hiringcafe-toolkit` entry point
@@ -56,6 +58,42 @@ truncated run is visible rather than silent.
 
 This is a personal-scale tool. Requests are sequential with a delay between pages, and there is a
 hard page ceiling per run.
+
+### The `dateFetchedPastNDays` parameter
+
+Despite appearing in the UI as a dropdown of preset ranges, this is a literal count of days,
+filtering on when hiring.cafe's crawler **fetched** a posting - not when the employer published
+it. The UI pads each preset by roughly one extra unit of its own granularity, to cover the lag
+between a job going live and the crawler indexing it.
+
+| UI label | Value | UI label | Value |
+|---|---|---|---|
+| All time | -1 | 3 months | *(omitted)* |
+| Past 24 hours | 2 | 4 months | 151 |
+| 3 days | 4 | 5 months | 181 |
+| 1 week | 14 | 6 months | 211 |
+| 2 weeks | 21 | 1 year | 750 |
+| 3 weeks | 29 | 2 years | 1080 |
+| 1 month | 61 | 3 years | 1440 |
+| 2 months | 91 | | |
+
+Omitting the field entirely is the "3 months" option, which by the padding rule is a ~121-day
+window. An absent value is therefore a wide default, not an unbounded search.
+
+Because the padding is baked into the value, the parameter is a poor proxy for posting freshness.
+Filter on `estimated_publish_date` downstream instead.
+
+Preset values are not believed to be the only valid ones - the parameter looks continuous - but
+that is untested.
+
+### Compensation filters
+
+`maxCompensationLowEnd` bounds the low end of a posting's *maximum* compensation: setting it to
+`"190000"` (a string, not a number) keeps jobs whose upper figure is at least $190k. It does
+**not** hide postings that state no salary - measured at 2328 results with the filter alone
+versus 1572 with "Transparent salaries only" also enabled, so 756 undisclosed postings passed
+through. That matters, because postings without a stated salary are a large and *good* slice of
+the results rather than noise to discard.
 
 ## Setup
 
@@ -123,7 +161,7 @@ After a run, check `meta-*.json` before trusting the results:
   actually retrieved. Pagination can thin out before the reported total is reached; when that
   matters, split the search into narrower ones.
 
-### Stage 2: rollup
+#### Stage 2: rollup
 
 ```bash
 uv run hiringcafe-toolkit company-discovery rollup
@@ -159,7 +197,7 @@ The `ambiguous_domains` diagnostic is worth a glance after each run: it lists we
 resolved to more than one company name, which is how a wrong merge (subsidiaries sharing a
 domain) would show up.
 
-### Stage 3: filter
+#### Stage 3: filter
 
 ```bash
 uv run hiringcafe-toolkit company-discovery filter
@@ -187,7 +225,7 @@ The `excluded_sample` field in the meta is worth a glance on the first run: if h
 ever breaks, it shows up there as obviously wrong matches rather than as a silently smaller
 output file.
 
-### Stage 4: render
+#### Stage 4: render
 
 ```bash
 uv run hiringcafe-toolkit company-discovery render
@@ -223,6 +261,39 @@ a heuristic, and a 404 is expected occasionally.
 Rows in the second file have no company domain to key against, so their links open without
 marking anything. That list repeats in full on every run and is worked through by eye; when you
 find a company's real site, mark it there.
+
+### Job shortlist
+
+Where company discovery asks *which companies near me employ engineers*, this asks *what was
+posted that I should apply to*. The unit is the posting, filters are tight, and the run is
+scheduled rather than occasional.
+
+```bash
+# Stage 1: fetch raw job records for the configured shortlist search
+uv run hiringcafe-toolkit job-shortlist scrape
+
+# Smoke run before committing to a full one
+uv run hiringcafe-toolkit job-shortlist scrape --max-pages 3 --no-compress
+```
+
+Output goes to `data/job_shortlist/raw/`, in the same shape as company discovery except that the
+records file is gzipped by default:
+
+| File | Contents |
+|---|---|
+| `jobs-<timestamp>.jsonl.gz` | One raw record per line, deduplicated by `objectID`, otherwise untouched |
+| `meta-<timestamp>.json` | searchState used, fetch window, per-page counts, build ids, reported totals, stop reason |
+
+**On the fetch window.** Keep `dateFetchedPastNDays` at 21. The window is not a freshness filter -
+freshness comes from comparing against postings already seen. It is a *missed-run recovery
+buffer*: at 21 days you can skip three weeks of runs and lose nothing, whereas a 2-day window
+turns one skipped day into postings you can never retrieve. Three weeks of slack costs about a
+minute of scraping, so buy it. The scrape prints the window it used for exactly this reason.
+
+**On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
+discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
+snapshot, which reaches several GB within a year uncompressed. Reading accepts both forms
+unconditionally, so `--no-compress` and existing plain files both keep working.
 
 ## License
 

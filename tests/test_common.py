@@ -8,11 +8,18 @@ from pathlib import Path
 import pytest
 
 from hiringcafe_toolkit.common.config import (
+    DEFAULT_DELAY_SECONDS,
     ConfigError,
     load_company_discovery_config,
+    load_job_shortlist_config,
     load_search_state,
 )
-from hiringcafe_toolkit.common.jsonl import JsonlWriter, read_jsonl
+from hiringcafe_toolkit.common.jsonl import (
+    JsonlWriter,
+    is_compressed,
+    read_jsonl,
+    with_compression,
+)
 
 VALID_CONFIG = """
 [search]
@@ -151,3 +158,60 @@ def test_read_jsonl_reports_bad_line_number(tmp_path: Path) -> None:
     path = write(tmp_path / "j.jsonl", '{"a":1}\nnot json\n')
     with pytest.raises(ValueError, match=":2:"):
         list(read_jsonl(path))
+
+
+# ----- job-shortlist config ----------------------------------------------
+
+
+def write_shortlist_config(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "job_shortlist.toml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_job_shortlist_config_defaults_to_compressed(tmp_path: Path) -> None:
+    path = write_shortlist_config(
+        tmp_path, '[search]\nsearchstate_path = "searchstates/local.json"\n'
+    )
+    config = load_job_shortlist_config(path)
+
+    assert config.searchstate_path == (tmp_path / "searchstates/local.json").resolve()
+    assert config.scrape.compress is True
+    assert config.scrape.delay_seconds == DEFAULT_DELAY_SECONDS
+
+
+def test_job_shortlist_config_reads_scrape_overrides(tmp_path: Path) -> None:
+    path = write_shortlist_config(
+        tmp_path,
+        '[search]\nsearchstate_path = "s.json"\n'
+        "[scrape]\ndelay_seconds = 2.5\nmax_pages = 40\ncompress = false\n",
+    )
+    config = load_job_shortlist_config(path)
+
+    assert (config.scrape.delay_seconds, config.scrape.max_pages) == (2.5, 40)
+    assert config.scrape.compress is False
+
+
+def test_job_shortlist_config_rejects_non_boolean_compress(tmp_path: Path) -> None:
+    path = write_shortlist_config(
+        tmp_path, '[search]\nsearchstate_path = "s.json"\n[scrape]\ncompress = "yes"\n'
+    )
+    with pytest.raises(ConfigError, match="compress must be true or false"):
+        load_job_shortlist_config(path)
+
+
+def test_job_shortlist_config_requires_a_searchstate(tmp_path: Path) -> None:
+    path = write_shortlist_config(tmp_path, "[scrape]\nmax_pages = 5\n")
+    with pytest.raises(ConfigError, match=r"missing required \[search\] section"):
+        load_job_shortlist_config(path)
+
+
+def test_with_compression_is_idempotent_both_ways() -> None:
+    plain = Path("data/jobs-2026-01-01.jsonl")
+    gz = with_compression(plain, True)
+
+    assert gz.name.endswith(".jsonl.gz")
+    assert with_compression(gz, True) == gz
+    assert with_compression(gz, False) == plain
+    assert with_compression(plain, False) == plain
+    assert is_compressed(gz) and not is_compressed(plain)
