@@ -38,6 +38,7 @@ from hiringcafe_toolkit.common.location import (
 )
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
 from hiringcafe_toolkit.company_discovery.careers_link import (
+    TIER_RANK,
     DerivationTier,
     derive_careers_link,
 )
@@ -82,6 +83,15 @@ class CompanyAccumulator:
     software_titles: list[tuple[str, str]] = field(default_factory=list)
     other_titles: list[tuple[str, str]] = field(default_factory=list)
     profile: JsonDict = field(default_factory=dict)
+
+
+def _negated(published: str) -> tuple[int, ...]:
+    """Sort key making a newer date compare smaller.
+
+    Dates are ISO strings, so this inverts them codepoint-wise rather than
+    parsing, which keeps missing and malformed values orderable.
+    """
+    return tuple(-ord(character) for character in published)
 
 
 def _text(value: Any) -> str | None:
@@ -299,14 +309,21 @@ def rollup_records(records: Iterable[Mapping[str, Any]], options: RollupOptions)
         if title:
             _record_title(accumulator, title, category, published)
 
-        # Prefer the newest posting's link: for query-parameter ATSes the
-        # careers link *is* a posting URL, and a stale one may be delisted.
-        if careers.url is not None and (
-            accumulator.careers_url is None or published > (accumulator.careers_published_at or "")
-        ):
-            accumulator.careers_url = careers.url
-            accumulator.careers_tier = careers.tier
-            accumulator.careers_published_at = published
+        # Prefer the link that lands closest to a job list, then the newest.
+        # A company posting through two applicant tracking systems should get
+        # the one with a usable board URL rather than whichever posting was
+        # most recent; recency only breaks ties, since a stale posting link may
+        # already be delisted.
+        if careers.url is not None:
+            candidate = (TIER_RANK[careers.tier], _negated(published))
+            current = (
+                TIER_RANK[accumulator.careers_tier],
+                _negated(accumulator.careers_published_at or ""),
+            )
+            if accumulator.careers_url is None or candidate < current:
+                accumulator.careers_url = careers.url
+                accumulator.careers_tier = careers.tier
+                accumulator.careers_published_at = published
 
     companies: list[JsonDict] = []
     tail: list[JsonDict] = []

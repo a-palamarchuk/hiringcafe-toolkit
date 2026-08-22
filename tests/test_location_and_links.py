@@ -13,6 +13,7 @@ from hiringcafe_toolkit.common.location import (
 )
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
 from hiringcafe_toolkit.company_discovery.careers_link import (
+    TIER_RANK,
     DerivationTier,
     derive_careers_link,
 )
@@ -285,6 +286,45 @@ def test_derive_careers_link_rejects_unusable_input(url: str | None, source: str
     link = derive_careers_link(url, source)
     assert link.url is None
     assert link.tier is DerivationTier.NONE
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://eihu.fa.us8.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX"
+            "/requisitions/job/2615878",
+            "https://eihu.fa.us8.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX"
+            "/requisitions",
+        ),
+        (
+            # Site name varies, and the job segment is sometimes not nested
+            # under requisitions.
+            "https://fa-essf-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en"
+            "/sites/CX_1/job/10003953",
+            "https://fa-essf-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en"
+            "/sites/CX_1/requisitions",
+        ),
+    ],
+)
+def test_oracle_cloud_trims_to_the_site_root(url: str, expected: str) -> None:
+    link = derive_careers_link(url, "oraclecloud")
+    assert link.url == expected
+    assert link.tier is DerivationTier.HOST_AND_SEGMENTS
+
+
+def test_oracle_cloud_without_a_site_segment_keeps_the_posting() -> None:
+    """A shape the rule does not recognize must not produce a confident guess."""
+    link = derive_careers_link("https://x.oraclecloud.com/hcmUI/nothing/here", "oraclecloud")
+    assert link.url == "https://x.oraclecloud.com/hcmUI/nothing/here"
+    assert link.tier is DerivationTier.POSTING
+
+
+def test_tier_rank_prefers_job_lists_over_postings() -> None:
+    assert TIER_RANK[DerivationTier.HOST] == TIER_RANK[DerivationTier.HOST_AND_SEGMENTS]
+    assert TIER_RANK[DerivationTier.HOST] < TIER_RANK[DerivationTier.BOARD]
+    assert TIER_RANK[DerivationTier.BOARD] < TIER_RANK[DerivationTier.POSTING]
+    assert TIER_RANK[DerivationTier.POSTING] < TIER_RANK[DerivationTier.NONE]
 
 
 def test_path_source_without_enough_segments_falls_back_to_host() -> None:

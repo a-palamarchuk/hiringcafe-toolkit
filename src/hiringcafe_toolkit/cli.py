@@ -8,6 +8,7 @@ changing a filter should never mean re-scraping.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -20,6 +21,7 @@ from hiringcafe_toolkit.common.config import (
     load_search_state,
 )
 from hiringcafe_toolkit.common.jsonl import read_jsonl
+from hiringcafe_toolkit.company_discovery.render import run_render
 from hiringcafe_toolkit.company_discovery.rollup import RollupOptions, run_rollup
 from hiringcafe_toolkit.company_discovery.scrape import run_scrape
 from hiringcafe_toolkit.company_discovery.visited_filter import (
@@ -31,6 +33,7 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
 DEFAULT_INTERIM_DIR = Path("data/company_discovery/interim")
+DEFAULT_PROCESSED_DIR = Path("data/company_discovery/processed")
 
 app = typer.Typer(
     help="Personal hiring.cafe scraping and processing toolkit.", no_args_is_help=True
@@ -242,6 +245,55 @@ def company_discovery_filter(
     typer.echo(f"No website: {result.passthrough} passed through unfiltered")
     typer.echo(f"Meta:       {result.meta_path}")
     typer.echo(f"Excluded as already visited: {result.excluded}")
+
+
+@company_discovery_app.command("render")
+def company_discovery_render(
+    companies: Annotated[
+        Path | None,
+        typer.Option("--companies", help="Filtered JSONL to render. Defaults to the newest."),
+    ] = None,
+    interim_dir: Annotated[
+        Path, typer.Option("--interim-dir", help="Where to look for filtered output.")
+    ] = DEFAULT_INTERIM_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for the rendered pages.")
+    ] = DEFAULT_PROCESSED_DIR,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Render the visit list as HTML for the VisitLogger tab queue."""
+    _configure_logging(verbose)
+
+    companies_path = (
+        companies if companies is not None else _newest(interim_dir, "remaining-2*.jsonl")
+    )
+    tail_path = _newest_optional(interim_dir, "remaining-no-website-*.jsonl")
+
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    main_result = run_render(
+        read_jsonl(companies_path),
+        out_dir / f"companies-{stamp}.html",
+        title="Companies to visit",
+        note=(
+            "One queued link per row (careers), keyed to the company domain. "
+            "Company and search links are not queued."
+        ),
+    )
+    typer.echo(f"Source:     {companies_path}")
+    typer.echo(f"Companies:  {main_result.path} ({main_result.rows} rows)")
+
+    if tail_path is not None:
+        tail_result = run_render(
+            read_jsonl(tail_path),
+            out_dir / f"companies-no-website-{stamp}.html",
+            title="Companies without a website",
+            note=(
+                "These rows have no company domain, so nothing is marked visited and the "
+                "list repeats in full on every run. When you find the real company site, "
+                "mark it there."
+            ),
+        )
+        typer.echo(f"No website: {tail_result.path} ({tail_result.rows} rows)")
 
 
 if __name__ == "__main__":

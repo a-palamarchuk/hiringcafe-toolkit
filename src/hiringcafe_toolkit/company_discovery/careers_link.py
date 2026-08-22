@@ -49,6 +49,19 @@ class DerivationTier(StrEnum):
     NONE = "none"
 
 
+#: Preference order when the same company is reachable through more than one
+#: applicant tracking system. A company posting through two vendors should get
+#: whichever link lands on a job list, not whichever posting happened to be
+#: newest.
+TIER_RANK: dict[DerivationTier, int] = {
+    DerivationTier.HOST: 0,
+    DerivationTier.HOST_AND_SEGMENTS: 0,
+    DerivationTier.BOARD: 1,
+    DerivationTier.POSTING: 2,
+    DerivationTier.NONE: 3,
+}
+
+
 @dataclass(frozen=True)
 class CareersLink:
     url: str | None
@@ -128,6 +141,14 @@ BOARD_QUERY_SOURCES: dict[str, BoardRule] = {
     ),
 }
 
+#: Sources whose listing URL is the path up to and including the segment after
+#: ``/sites/``, plus a fixed suffix. Oracle Cloud Recruiting puts the employer
+#: in the host and the site name in the path (``CX``, ``CX_1``, ...), with the
+#: job appended as either ``requisitions/job/<id>`` or ``job/<id>``.
+SITE_PATH_SOURCES: dict[str, tuple[str, str]] = {
+    "oraclecloud": ("sites", "requisitions"),
+}
+
 #: Sources where the employer is identified only by a query parameter, so no
 #: host- or path-level trim isolates their board.
 POSTING_URL_SOURCES: frozenset[str] = frozenset(
@@ -145,7 +166,6 @@ POSTING_URL_SOURCES: frozenset[str] = frozenset(
         "pageup",  # careers.pageuppeople.com/863/cw/en/job/<id>
         "winocular",  # jobs.pwcs.edu/workspace/wSpace.exe?Action=...
         "oraclepeoplesoft",  # careers.dc.gov/psc/...?JobOpeningId=...
-        "oraclecloud",  # <tenant>.fa.<dc>.oraclecloud.com/hcmUI/...
         "salesforce",  # <tenant>.my.salesforce-sites.com/...?jobId=...
         "paradox",  # <tenant>.paradox.ai/co/<Co>/Job?job_id=...
     }
@@ -155,6 +175,21 @@ POSTING_URL_SOURCES: frozenset[str] = frozenset(
 def _host_root(parts: tuple[str, str, str, str, str]) -> str:
     scheme, netloc = parts[0], parts[1]
     return urlunsplit((scheme or "https", netloc, "/", "", ""))
+
+
+def _apply_site_path_rule(split: SplitResult, marker: str, suffix: str) -> str | None:
+    """Trim the path to the site root, e.g. ``/.../sites/CX_1/requisitions``."""
+    segments = [segment for segment in split.path.split("/") if segment]
+    try:
+        marker_index = segments.index(marker)
+    except ValueError:
+        return None
+    if marker_index + 1 >= len(segments):
+        return None
+    kept = segments[: marker_index + 2]
+    if suffix:
+        kept.append(suffix)
+    return urlunsplit((split.scheme, split.netloc, "/" + "/".join(kept), "", ""))
 
 
 def _apply_board_rule(split: SplitResult, rule: BoardRule) -> str:
@@ -187,6 +222,13 @@ def derive_careers_link(apply_url: str | None, source: str | None) -> CareersLin
 
     parts = (split.scheme, split.netloc, split.path, split.query, split.fragment)
     key = (source or "").strip().lower()
+
+    site_rule = SITE_PATH_SOURCES.get(key)
+    if site_rule is not None:
+        trimmed = _apply_site_path_rule(split, *site_rule)
+        if trimmed is not None:
+            return CareersLink(trimmed, DerivationTier.HOST_AND_SEGMENTS)
+        return CareersLink(apply_url, DerivationTier.POSTING)
 
     board_rule = BOARD_QUERY_SOURCES.get(key)
     if board_rule is not None:

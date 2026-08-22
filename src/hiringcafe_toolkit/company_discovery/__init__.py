@@ -9,6 +9,12 @@ from hiringcafe_toolkit.company_discovery.careers_link import (
     DerivationTier,
     derive_careers_link,
 )
+from hiringcafe_toolkit.company_discovery.render import (
+    RenderResult,
+    render_html,
+    run_render,
+    sort_companies,
+)
 from hiringcafe_toolkit.company_discovery.rollup import (
     RollupOptions,
     RollupResult,
@@ -29,6 +35,7 @@ __all__ = [
     "CareersLink",
     "DerivationTier",
     "FilterResult",
+    "RenderResult",
     "RollupOptions",
     "RollupResult",
     "ScrapeResult",
@@ -37,7 +44,10 @@ __all__ = [
     "derive_careers_link",
     "filter_companies",
     "load_visit_log",
+    "render_html",
     "run_filter",
+    "run_render",
+    "sort_companies",
     "rollup_records",
     "run_rollup",
     "run_scrape",

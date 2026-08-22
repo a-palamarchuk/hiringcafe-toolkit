@@ -257,6 +257,46 @@ def test_careers_link_follows_the_newest_posting() -> None:
     assert "NEW" in result["companies"][0]["careers_url"]
 
 
+def test_better_derivation_wins_over_a_newer_posting() -> None:
+    """A company posting through two ATSes should get the link that lands on a
+    job list, not whichever posting happened to be newest."""
+    result = roll(
+        posting(
+            object_id="a",
+            source="grnhse",
+            apply_url="https://job-boards.greenhouse.io/acme/jobs/1",
+            published="2026-01-01T00:00:00.000Z",
+        ),
+        posting(
+            object_id="b",
+            source="brassring",
+            apply_url="https://sjobs.brassring.com/j?partnerid=1&jobid=9",
+            published="2026-08-01T00:00:00.000Z",
+        ),
+    )
+    company = result["companies"][0]
+    assert company["careers_url"] == "https://job-boards.greenhouse.io/acme/"
+    assert company["careers_tier"] == "host_and_segments"
+
+
+def test_newest_posting_still_wins_within_a_tier() -> None:
+    result = roll(
+        posting(
+            object_id="a",
+            source="brassring",
+            apply_url="https://sjobs.brassring.com/j?partnerid=1&jobid=OLD",
+            published="2026-01-01T00:00:00.000Z",
+        ),
+        posting(
+            object_id="b",
+            source="brassring",
+            apply_url="https://sjobs.brassring.com/j?partnerid=1&jobid=NEW",
+            published="2026-08-01T00:00:00.000Z",
+        ),
+    )
+    assert "NEW" in result["companies"][0]["careers_url"]
+
+
 def test_board_tier_link_drops_the_job_id() -> None:
     result = roll(
         posting(

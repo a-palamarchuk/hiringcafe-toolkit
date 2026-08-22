@@ -187,7 +187,42 @@ The `excluded_sample` field in the meta is worth a glance on the first run: if h
 ever breaks, it shows up there as obviously wrong matches rather than as a silently smaller
 output file.
 
-Later stages (render) are not implemented yet.
+### Stage 4: render
+
+```bash
+uv run hiringcafe-toolkit company-discovery render
+```
+
+Writes the visit list to `data/company_discovery/processed/` as HTML, sorted nearest first with
+unknown distances last:
+
+| File | Contents |
+|---|---|
+| `companies-<timestamp>.html` | The main list |
+| `companies-no-website-<timestamp>.html` | The rows with no company website |
+
+Open the page in Firefox and start the
+[VisitLogger](https://github.com/a-palamarchuk/visit-logger) tab queue from its context menu.
+
+Each row carries exactly one queued link - the careers page - marked with the company's own
+website host:
+
+```html
+<a href="https://job-boards.greenhouse.io/acme/"
+   data-visit-open data-visit-key="acme.com" data-visit-mark="auto">careers</a>
+```
+
+The key matters because careers pages often live on a vendor host shared by thousands of
+employers. Keying the link to the company's own domain is what lets the visit log deduplicate
+correctly, and what lets an interrupted pass resume: rows already opened are skipped next time.
+
+The company and search links on the same row are plain anchors, so they never enter the queue.
+They are what you reach for when a derived careers URL turns out to be wrong - the derivation is
+a heuristic, and a 404 is expected occasionally.
+
+Rows in the second file have no company domain to key against, so their links open without
+marking anything. That list repeats in full on every run and is worked through by eye; when you
+find a company's real site, mark it there.
 
 ## License
 
