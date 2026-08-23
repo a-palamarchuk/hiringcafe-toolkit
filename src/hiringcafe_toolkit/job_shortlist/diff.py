@@ -281,7 +281,14 @@ def load_opened_postings(path: Path) -> dict[str, bool]:
 
     Keys are taken verbatim. Host normalization lower-cases, and posting ids are
     case-sensitive, so normalizing here would silently break every lookup.
+
+    A missing export is not an error. The labels are for later analysis and
+    suppression does not depend on them, so an absent or not-yet-exported file
+    should cost a warning rather than a failed run in the middle of a chain.
     """
+    if not path.exists():
+        logger.warning("%s: visit log not found; no opened/applied labels recorded", path)
+        return {}
     parsed: Any = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(parsed, dict):
         raise ValueError(f"{path}: expected a JSON object")

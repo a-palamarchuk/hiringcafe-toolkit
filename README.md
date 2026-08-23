@@ -430,6 +430,34 @@ from the raw scrape in seconds; this does not, and losing it re-surfaces every p
 with no warning. It is gitignored like the rest of `data/`, and it stays small - about
 390 bytes per posting, so roughly 4 MB after a year of daily runs.
 
+#### Running it daily
+
+```bash
+make shortlist
+```
+
+which is the four stages in order:
+
+```bash
+uv run hiringcafe-toolkit job-shortlist scrape
+uv run hiringcafe-toolkit job-shortlist normalize
+uv run hiringcafe-toolkit job-shortlist screen
+uv run hiringcafe-toolkit job-shortlist diff --visit-log data/inputs/visitlogger-export.json
+```
+
+Chain them with `make` or `&&`, never `;`. Every stage defaults to the newest file from the
+one before, so a failed scrape would otherwise have the rest quietly reprocess yesterday's
+data and report a shortlist of zero - which looks like a quiet day rather than a broken run.
+
+**Export the visit log before running, not after.** The export is a manual step in the
+extension, and `diff` reads it to attach `opened` and `applied` labels. A stale or missing
+export only means the labels lag; suppression does not depend on it, and a missing file
+warns rather than failing.
+
+**Daily is a target, not a requirement.** The 21-day fetch window is three weeks of
+missed-run slack, so skipping a week costs nothing. Rendered pages are never overwritten
+either, so the backlog waits in the file it was first written to.
+
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
 snapshot, which reaches several GB within a year uncompressed. Reading accepts both forms

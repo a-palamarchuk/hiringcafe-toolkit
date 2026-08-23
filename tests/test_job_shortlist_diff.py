@@ -392,3 +392,14 @@ def test_meta_records_the_counts(tmp_path: Path) -> None:
     assert meta["surfaced"] == 1
     assert meta["of_which_new"] == 1
     assert meta["store_entries_after"] == 1
+
+
+def test_a_missing_visit_log_warns_rather_than_failing(tmp_path: Path) -> None:
+    """Labels are optional; suppression is not. A missing export must not abort."""
+    store = tmp_path / "seen.jsonl"
+    result = run_diff(
+        [screened()], tmp_path, store, visit_log_path=tmp_path / "absent.json", compress=False
+    )
+
+    assert result.surfaced == 1
+    assert result.opened == 0
