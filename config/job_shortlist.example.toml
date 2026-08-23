@@ -22,3 +22,26 @@ max_pages = 500
 # reaches several GB within a year. Reading accepts both forms, so flipping
 # this off later does not strand existing files.
 compress = true
+
+[screen]
+# A posting whose STATED ceiling falls below this is rejected. Postings that
+# state nothing are never rejected on compensation - roughly a fifth of results
+# disclose no salary, and they include some of the best matches.
+comp_floor = 180000
+
+# A stated band whose BOTTOM falls below this is demoted, not rejected. A wide
+# band means the ceiling may belong to a different level or a pricier metro
+# than this one.
+comp_min_floor = 130000
+
+# Cities in one posting before its band is treated as geo-tiered. Measured:
+# postings spanning five or more cities have a median band spread of 53%
+# against 30% for a single city, so their maximum is the priciest metro's
+# figure rather than a local one. Demotes, never rejects.
+wide_geography_cities = 5
+
+# Companies never worth surfacing, matched case-insensitively against the
+# company name. Unlike company discovery, where a bad company costs one glance,
+# a staffing firm here can flood the list every day. Populate this from the
+# repeat offenders in the screen output rather than guessing up front.
+company_blocklist = []

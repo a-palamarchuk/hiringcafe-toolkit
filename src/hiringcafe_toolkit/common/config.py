@@ -22,6 +22,21 @@ DEFAULT_MAX_PAGES = 500
 DEFAULT_RADIUS_MILES = 30.0
 DEFAULT_COMPRESS = True
 
+#: A posting whose stated ceiling falls below this is rejected. Postings that
+#: state nothing are never rejected on compensation - they are a large and good
+#: slice of the results rather than noise.
+DEFAULT_COMP_FLOOR = 180_000
+
+#: A stated band whose bottom falls below this is demoted, not rejected. A wide
+#: band means the ceiling belongs to a level or a metro that may not be this
+#: one.
+DEFAULT_COMP_MIN_FLOOR = 130_000
+
+#: Cities in one posting before its pay band is treated as geo-tiered. Measured:
+#: postings spanning five or more cities have a median band spread of 53%
+#: against 30% for a single city, so the maximum is the priciest metro's number.
+DEFAULT_WIDE_GEOGRAPHY_CITIES = 5
+
 
 class ConfigError(Exception):
     """The configuration file is missing, malformed, or inconsistent."""
@@ -246,6 +261,25 @@ def load_search_state(path: Path) -> JsonDict:
 
 
 @dataclass(frozen=True)
+class ScreenSettings:
+    """Thresholds and lists for the screen stage.
+
+    Only the values that are personal live here. The word lists that decide
+    role shape and discipline stay in code: they encode what the data looks
+    like rather than what the user wants, and they need comments to be
+    intelligible.
+    """
+
+    comp_floor: int = DEFAULT_COMP_FLOOR
+    comp_min_floor: int = DEFAULT_COMP_MIN_FLOOR
+    wide_geography_cities: int = DEFAULT_WIDE_GEOGRAPHY_CITIES
+    company_blocklist: frozenset[str] = frozenset()
+    """Lower-cased company names never worth surfacing. Unlike company
+    discovery, where a bad company costs one glance, a staffing firm here can
+    flood the list every day."""
+
+
+@dataclass(frozen=True)
 class JobShortlistConfig:
     """Settings for the job-shortlist pipeline.
 
@@ -261,6 +295,43 @@ class JobShortlistConfig:
 
     searchstate_path: Path
     scrape: ScrapeSettings
+    screen: ScreenSettings = ScreenSettings()
+
+
+def _positive_int(table: dict[str, Any], key: str, default: int, path: Path) -> int:
+    value = table.get(key, default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{path}: [screen].{key} must be a non-negative integer")
+    return value
+
+
+def _screen_settings(data: dict[str, Any], path: Path) -> ScreenSettings:
+    table = data.get("screen", {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [screen] must be a table")
+
+    raw_blocklist = table.get("company_blocklist", [])
+    if not isinstance(raw_blocklist, list) or not all(
+        isinstance(name, str) for name in raw_blocklist
+    ):
+        raise ConfigError(f"{path}: [screen].company_blocklist must be a list of strings")
+
+    settings = ScreenSettings(
+        comp_floor=_positive_int(table, "comp_floor", DEFAULT_COMP_FLOOR, path),
+        comp_min_floor=_positive_int(table, "comp_min_floor", DEFAULT_COMP_MIN_FLOOR, path),
+        wide_geography_cities=_positive_int(
+            table, "wide_geography_cities", DEFAULT_WIDE_GEOGRAPHY_CITIES, path
+        ),
+        # Compared against a lower-cased company name at screening time, so
+        # normalize once here rather than at every comparison.
+        company_blocklist=frozenset(name.strip().lower() for name in raw_blocklist if name.strip()),
+    )
+    if settings.comp_min_floor > settings.comp_floor:
+        raise ConfigError(
+            f"{path}: [screen].comp_min_floor ({settings.comp_min_floor}) exceeds "
+            f"comp_floor ({settings.comp_floor}); the band bottom cannot sit above its top"
+        )
+    return settings
 
 
 def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
@@ -269,4 +340,5 @@ def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
     return JobShortlistConfig(
         searchstate_path=_searchstate_path(data, path),
         scrape=_scrape_settings(data, path),
+        screen=_screen_settings(data, path),
     )

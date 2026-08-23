@@ -41,6 +41,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
@@ -171,6 +172,27 @@ class Posting:
 
     def as_record(self) -> JsonDict:
         return asdict(self)
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> Posting:
+        """Rebuild a posting from its JSONL form.
+
+        JSON has no tuples, so sequence fields arrive as lists and are
+        converted back: later stages compare and hash these, and a list would
+        fail at the point of use rather than at the point of loading.
+        """
+        known = {f.name for f in dataclass_fields(cls)}
+        values: dict[str, Any] = {}
+        for name in known & set(record):
+            value = record[name]
+            values[name] = tuple(value) if isinstance(value, list) else value
+        unknown = set(record) - known
+        if unknown:
+            # Loud rather than silent: an unexpected key means the writer and
+            # reader have drifted apart, which is the failure this schema
+            # exists to prevent.
+            raise ValueError(f"unknown posting fields: {', '.join(sorted(unknown))}")
+        return cls(**values)
 
 
 def _text(value: Any) -> str:

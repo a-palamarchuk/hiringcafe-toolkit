@@ -8,6 +8,7 @@ changing a filter should never mean re-scraping.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -31,6 +32,7 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
     run_filter,
 )
 from hiringcafe_toolkit.job_shortlist.normalize import run_normalize
+from hiringcafe_toolkit.job_shortlist.screen import run_screen
 
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
@@ -40,6 +42,9 @@ DEFAULT_PROCESSED_DIR = Path("data/company_discovery/processed")
 SHORTLIST_CONFIG_PATH = Path("config/job_shortlist.toml")
 SHORTLIST_RAW_DIR = Path("data/job_shortlist/raw")
 SHORTLIST_INTERIM_DIR = Path("data/job_shortlist/interim")
+SHORTLIST_PROCESSED_DIR = Path("data/job_shortlist/processed")
+
+POSTINGS_GLOB = "postings-*.jsonl*"
 
 #: Raw scrape output may be gzipped or not; stages accept either, so lookups
 #: glob both rather than assuming whichever the last run happened to write.
@@ -433,6 +438,80 @@ def job_shortlist_normalize(
         typer.secho(
             f"  {declined} candidate merges declined on text disagreement - these are "
             "distinct roles sharing a title.",
+            fg=typer.colors.CYAN,
+        )
+
+
+@job_shortlist_app.command("screen")
+def job_shortlist_screen(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+    postings: Annotated[
+        Path | None,
+        typer.Option("--postings", "-p", help="Normalized JSONL. Defaults to the newest."),
+    ] = None,
+    interim_dir: Annotated[
+        Path, typer.Option("--interim-dir", help="Where to look for normalized output.")
+    ] = SHORTLIST_INTERIM_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for screened output.")
+    ] = SHORTLIST_PROCESSED_DIR,
+    comp_floor: Annotated[
+        int | None, typer.Option("--comp-floor", help="Override the compensation floor.")
+    ] = None,
+    no_compress: Annotated[
+        bool, typer.Option("--no-compress", help="Write screened output uncompressed.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Band normalized postings as strong, possible, or rejected."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_job_shortlist_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    screen_settings = settings.screen
+    if comp_floor is not None:
+        screen_settings = replace(screen_settings, comp_floor=comp_floor)
+
+    postings_path = postings if postings is not None else _newest(interim_dir, POSTINGS_GLOB)
+    typer.echo(f"Source: {postings_path}")
+    typer.echo(f"Comp floor: ${screen_settings.comp_floor:,}")
+
+    result = run_screen(
+        read_jsonl(postings_path),
+        out_dir,
+        screen_settings,
+        source_path=postings_path,
+        compress=settings.scrape.compress and not no_compress,
+    )
+
+    total = sum(result.counts.values())
+    typer.echo("")
+    typer.echo(f"Screened: {result.screened_path}")
+    typer.echo(f"Meta:     {result.meta_path}")
+    typer.echo("")
+    for band in ("strong", "possible", "rejected"):
+        count = result.counts.get(band, 0)
+        typer.echo(f"  {band:10s} {count:6d}   {count / max(total, 1) * 100:5.1f}%")
+    typer.echo("")
+    typer.echo("Rejected for (a posting may have several):")
+    for reason, count in result.reject_reasons.items():
+        typer.echo(f"  {reason:34s} {count:6d}")
+    if result.demote_reasons:
+        typer.echo("")
+        typer.echo("Demoted for:")
+        for reason, count in result.demote_reasons.items():
+            typer.echo(f"  {reason:34s} {count:6d}")
+    if result.near_misses:
+        typer.echo("")
+        typer.secho(
+            f"  {result.near_misses} postings would be strong but for compensation. "
+            f"Grep the output for them before moving the floor.",
             fg=typer.colors.CYAN,
         )
 

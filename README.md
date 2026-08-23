@@ -341,6 +341,46 @@ Erring toward under-merging is deliberate: a missed merge shows the same job twi
 glance, while a wrong merge deletes a job you never see. The `fallback_merges_declined` count is
 how often that judgment was exercised.
 
+#### Stage 3: screen
+
+```bash
+uv run hiringcafe-toolkit job-shortlist screen
+uv run hiringcafe-toolkit job-shortlist screen --comp-floor 200000   # try a threshold
+```
+
+Bands every posting, writing all three bands to `data/job_shortlist/processed/`:
+
+| File | Contents |
+|---|---|
+| `screened-<timestamp>.jsonl.gz` | Every posting with `band`, `reject_reasons`, and `demote_reasons`, strong first |
+| `screen-meta-<timestamp>.json` | Settings used, band counts, reason counts, near-miss count |
+
+**Three verdicts, not two.** The available signals fall into two very different
+classes. *Hard rejects* read facts - an expired flag, a commitment type, a government
+domain, a stated salary - and being strict there is safe because the input is not in
+doubt. *Demotions* read judgement calls, like whether a title describes building systems
+or selling them, and a match moves a posting out of `strong` without deleting it.
+
+Two fields earned demotion by measurement rather than caution. `role_type` labels about a
+quarter of its People Manager postings as management on nothing but an IC ladder title
+like "Principal Engineer", so it only rejects when a management title or management
+language corroborates it. `seniority_level` disagrees with the level written in the
+posting's own title about one time in seven, in both directions, so the raw title's level
+marker is read alongside it.
+
+**Every applicable reason is recorded**, not the first to fire. Stopping at the first
+match makes "would have been strong except for compensation" unanswerable, and that is
+the set worth re-reading whenever a threshold moves. The run prints its size.
+
+**Rejected postings are written out too.** A filter whose discards are invisible cannot
+be checked, and the discards here are large - compensation alone is about half of them.
+To read them:
+
+```bash
+zcat data/job_shortlist/processed/screened-*.jsonl.gz \
+  | jq -r 'select(.reject_reasons == ["comp below floor"]) | "\(.comp_max)\t\(.raw_title)\t\(.company)"'
+```
+
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
 snapshot, which reaches several GB within a year uncompressed. Reading accepts both forms
