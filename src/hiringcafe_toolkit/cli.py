@@ -33,6 +33,8 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
 )
 from hiringcafe_toolkit.job_shortlist.diff import run_diff
 from hiringcafe_toolkit.job_shortlist.normalize import run_normalize
+from hiringcafe_toolkit.job_shortlist.render import BAND_ORDER
+from hiringcafe_toolkit.job_shortlist.render import run_render as run_shortlist_render
 from hiringcafe_toolkit.job_shortlist.screen import run_screen
 
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
@@ -49,6 +51,7 @@ POSTINGS_GLOB = "postings-*.jsonl*"
 SCREENED_GLOB = "screened-*.jsonl*"
 
 SHORTLIST_STATE_PATH = Path("data/job_shortlist/state/seen.jsonl")
+SHORTLIST_GLOB = "shortlist-*.jsonl*"
 
 #: Raw scrape output may be gzipped or not; stages accept either, so lookups
 #: glob both rather than assuming whichever the last run happened to write.
@@ -593,6 +596,65 @@ def job_shortlist_diff(
         )
     if dry_run:
         typer.secho("\n  Dry run: the store was not updated.", fg=typer.colors.CYAN)
+
+
+@job_shortlist_app.command("render")
+def job_shortlist_render(
+    shortlist: Annotated[
+        Path | None,
+        typer.Option("--shortlist", "-s", help="Shortlist JSONL. Defaults to the newest."),
+    ] = None,
+    processed_dir: Annotated[
+        Path, typer.Option("--processed-dir", help="Where to look for the shortlist.")
+    ] = SHORTLIST_PROCESSED_DIR,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", "-o", help="Output HTML. Defaults to a stamped name."),
+    ] = None,
+    band: Annotated[
+        list[str] | None,
+        typer.Option("--band", help="Bands to include. Repeatable. Default: both."),
+    ] = None,
+    visit_log: Annotated[
+        Path | None,
+        typer.Option("--visit-log", help="VisitLogger export, to flag companies applied to."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Render the shortlist as a VisitLogger-compatible page."""
+    _configure_logging(verbose)
+
+    shortlist_path = shortlist if shortlist is not None else _newest(processed_dir, SHORTLIST_GLOB)
+    stamp = shortlist_path.name.removeprefix("shortlist-").split(".")[0]
+    out_path = out if out is not None else processed_dir / f"shortlist-{stamp}.html"
+
+    applied: frozenset[str] = frozenset()
+    if visit_log is not None:
+        try:
+            applied = load_visit_log(visit_log).applied_hosts
+        except VisitLogError as exc:
+            typer.secho(f"{exc} - continuing without applied markers", fg=typer.colors.YELLOW)
+
+    result = run_shortlist_render(
+        read_jsonl(shortlist_path),
+        out_path,
+        title="Job shortlist",
+        applied_hosts=applied,
+        bands=band if band else BAND_ORDER,
+        note=f"Source: {shortlist_path.name}",
+    )
+
+    typer.echo(f"Source: {shortlist_path}")
+    typer.echo(f"Page:   {result.path} ({result.rows} rows)")
+    for name, count in result.bands.items():
+        if count:
+            typer.echo(f"  {name:10s} {count:6d}")
+    if not result.rows:
+        typer.secho(
+            "  Nothing to render. Every posting was already surfaced by an earlier run; "
+            "the backlog is in the previous page.",
+            fg=typer.colors.CYAN,
+        )
 
 
 if __name__ == "__main__":

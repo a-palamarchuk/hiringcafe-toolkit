@@ -28,6 +28,12 @@ from hiringcafe_toolkit.job_shortlist.normalize import (
     run_normalize,
     similarity,
 )
+from hiringcafe_toolkit.job_shortlist.render import (
+    RenderResult,
+    render_html,
+    run_render,
+    sort_postings,
+)
 from hiringcafe_toolkit.job_shortlist.screen import (
     ScreenResult,
     Verdict,
@@ -39,6 +45,10 @@ from hiringcafe_toolkit.job_shortlist.screen import (
 )
 
 __all__ = [
+    "RenderResult",
+    "render_html",
+    "run_render",
+    "sort_postings",
     "DiffResult",
     "SeenEntry",
     "SeenStore",

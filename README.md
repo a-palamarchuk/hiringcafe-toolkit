@@ -430,6 +430,52 @@ from the raw scrape in seconds; this does not, and losing it re-surfaces every p
 with no warning. It is gitignored like the rest of `data/`, and it stays small - about
 390 bytes per posting, so roughly 4 MB after a year of daily runs.
 
+#### Stage 5: render
+
+```bash
+uv run hiringcafe-toolkit job-shortlist render
+uv run hiringcafe-toolkit job-shortlist render --band strong
+uv run hiringcafe-toolkit job-shortlist render --visit-log data/inputs/visitlogger-export.json
+```
+
+Writes `shortlist-<timestamp>.html` beside the shortlist it was built from, ready for the
+VisitLogger tab queue.
+
+**One queued link per row.** The queue is opt-in: when a page contains any
+`a[data-visit-open]` anchor, only those are queued, so the company and search links stay
+inert. The queued link is the apply URL, keyed to the posting:
+
+```html
+<a href="https://boards.greenhouse.io/acme/jobs/123"
+   data-visit-open data-visit-key="job:grnhse___acme___123" data-visit-mark="auto">
+```
+
+The `job:` prefix keeps the two pipelines apart in a shared export. The key is the posting
+rather than the host because apply URLs sit on ATS domains shared by thousands of
+employers - and because keying by posting makes the queue resumable, since rows already
+opened are skipped on the next pass.
+
+Marking produces the `opened` and `applied` labels the diff stage reads back. Nothing in
+the pipeline depends on them, but they can only be collected going forward, so the link is
+marked anyway. `applied` needs a deliberate F9 and is the clean label; `opened` fires on
+tab open.
+
+**Both bands in one page, strong first.** The queue walks the DOM in order and skips
+marked entries, so a single page works strong-first by itself and keeps its place without
+you tracking which file you were in. `--band strong` renders a subset when the possible
+section is too long to face.
+
+**Pages are never overwritten.** Each run writes its own stamped file, so an unread
+backlog stays readable where it was first written.
+
+Columns carry the qualifications that make a number readable rather than misleading:
+compensation is flagged `hourly` when annualized from an hourly rate, and `N metros` when
+the posting spans enough cities that its ceiling belongs to the priciest one. Demote
+reasons are shown, since why a posting is only `possible` is the judgement being made when
+skimming. With `--visit-log`, companies you have already sent a resume to are marked -
+shown rather than filtered, because two genuinely distinct roles at one employer can both
+be worth applying to.
+
 #### Running it daily
 
 ```bash
@@ -443,6 +489,7 @@ uv run hiringcafe-toolkit job-shortlist scrape
 uv run hiringcafe-toolkit job-shortlist normalize
 uv run hiringcafe-toolkit job-shortlist screen
 uv run hiringcafe-toolkit job-shortlist diff --visit-log data/inputs/visitlogger-export.json
+uv run hiringcafe-toolkit job-shortlist render --visit-log data/inputs/visitlogger-export.json
 ```
 
 Chain them with `make` or `&&`, never `;`. Every stage defaults to the newest file from the
