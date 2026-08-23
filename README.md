@@ -290,6 +290,57 @@ buffer*: at 21 days you can skip three weeks of runs and lose nothing, whereas a
 turns one skipped day into postings you can never retrieve. Three weeks of slack costs about a
 minute of scraping, so buy it. The scrape prints the window it used for exactly this reason.
 
+#### Stage 2: normalize
+
+```bash
+uv run hiringcafe-toolkit job-shortlist normalize
+```
+
+Flattens raw records onto a schema this pipeline controls and collapses duplicate listings,
+writing to `data/job_shortlist/interim/`:
+
+| File | Contents |
+|---|---|
+| `postings-<timestamp>.jsonl.gz` | One posting per line on the flat `Posting` schema, newest first |
+| `normalize-meta-<timestamp>.json` | Merge threshold and how it was derived, cluster-key coverage, merge and decline counts |
+
+**Why flatten.** Raw records nest their useful fields under `v5_processed_job_data` and
+`enriched_company_data`. Screening rules that reach into those paths break when the vendor
+renames a field, and they break *quietly*: a renamed field reads as absent, an absent field
+fails a check, and postings disappear with no error. Projecting onto a flat schema means a
+rename breaks one function loudly instead.
+
+**Why duplicate collapsing needs two stages.** `liberal_dedup_cluster` is hiring.cafe's own
+cross-ATS duplicate key and is trusted wherever it appears, but it is present on only about a
+third of records. The fallback key `(company, title, cities)` does the rest of the work, and on
+its own it over-collapses: large employers post many distinct roles under one generic title, and
+merging them means the second is never seen. So the key only proposes candidates, and a
+similarity check on the requirements text confirms each merge before it happens.
+
+Source is deliberately *not* part of the fallback key. A true cross-ATS duplicate appears under
+different sources by definition, so including it would block exactly the merges the key exists
+to make.
+
+**Why the raw title matters.** `core_job_title` has seniority stripped upstream - 208 raw titles
+in a 400-record sample carry a level marker against only 32 core titles. So four requisitions at
+levels I, 1.5 and II arrive with the same core title, the same company, the same city, and
+near-identical boilerplate requirements, and text similarity cannot separate them. A level
+signature read from the posting's own title is what keeps them apart. An absent level counts as
+a level of its own, because "Software Engineer" and "Senior Software Engineer" are different
+jobs. The guard applies only to the fallback path; a cluster key stays authoritative.
+
+**Why the threshold is calibrated per run.** Records that carry a cluster key are known
+duplicates, so their text-similarity distribution is what a real duplicate looks like in this
+data - measured around 0.66 on average, with the weak tail near 0.44. A hardcoded constant would
+reject merges the API itself makes, because the same job gets rewritten for each ATS and rarely
+scores near 1.0. The threshold and the number of ground-truth groups behind it are both recorded
+in the meta, so a run that fell back to the default is visible rather than silent. Override with
+`--similarity` when experimenting.
+
+Erring toward under-merging is deliberate: a missed merge shows the same job twice and costs one
+glance, while a wrong merge deletes a job you never see. The `fallback_merges_declined` count is
+how often that judgment was exercised.
+
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
 snapshot, which reaches several GB within a year uncompressed. Reading accepts both forms

@@ -30,6 +30,7 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
     load_visit_log,
     run_filter,
 )
+from hiringcafe_toolkit.job_shortlist.normalize import run_normalize
 
 DEFAULT_CONFIG_PATH = Path("config/company_discovery.toml")
 DEFAULT_RAW_DIR = Path("data/company_discovery/raw")
@@ -38,6 +39,7 @@ DEFAULT_PROCESSED_DIR = Path("data/company_discovery/processed")
 
 SHORTLIST_CONFIG_PATH = Path("config/job_shortlist.toml")
 SHORTLIST_RAW_DIR = Path("data/job_shortlist/raw")
+SHORTLIST_INTERIM_DIR = Path("data/job_shortlist/interim")
 
 #: Raw scrape output may be gzipped or not; stages accept either, so lookups
 #: glob both rather than assuming whichever the last run happened to write.
@@ -367,6 +369,72 @@ def job_shortlist_scrape(
         )
 
     _echo_scrape_result(result)
+
+
+@job_shortlist_app.command("normalize")
+def job_shortlist_normalize(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+    jobs: Annotated[
+        Path | None,
+        typer.Option("--jobs", "-j", help="Raw JSONL to normalize. Defaults to the newest."),
+    ] = None,
+    raw_dir: Annotated[
+        Path, typer.Option("--raw-dir", help="Where to look for raw scrape output.")
+    ] = SHORTLIST_RAW_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for normalized output.")
+    ] = SHORTLIST_INTERIM_DIR,
+    similarity: Annotated[
+        float | None,
+        typer.Option(
+            "--similarity",
+            help="Override the merge threshold. Default calibrates from the run's own "
+            "cluster-keyed records.",
+        ),
+    ] = None,
+    no_compress: Annotated[
+        bool, typer.Option("--no-compress", help="Write postings uncompressed.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Flatten raw records and collapse duplicate listings."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_job_shortlist_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    jobs_path = jobs if jobs is not None else _newest(raw_dir, JOBS_GLOB)
+    typer.echo(f"Source: {jobs_path}")
+
+    result = run_normalize(
+        read_jsonl(jobs_path),
+        out_dir,
+        source_path=jobs_path,
+        compress=settings.scrape.compress and not no_compress,
+        threshold=similarity,
+    )
+
+    typer.echo("")
+    typer.echo(f"Postings: {result.postings_path} ({result.postings_out})")
+    typer.echo(f"Meta:     {result.meta_path}")
+    typer.echo(f"Collapsed {result.postings_in} listings into {result.postings_out}")
+    typer.echo(f"Merge threshold: {result.threshold:.2f}")
+    typer.echo("")
+    for key in sorted(result.stats):
+        typer.echo(f"  {key}: {result.stats[key]}")
+    declined = result.stats.get("fallback_merges_declined", 0)
+    if declined:
+        typer.echo("")
+        typer.secho(
+            f"  {declined} candidate merges declined on text disagreement - these are "
+            "distinct roles sharing a title.",
+            fg=typer.colors.CYAN,
+        )
 
 
 if __name__ == "__main__":

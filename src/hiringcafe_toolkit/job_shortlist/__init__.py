@@ -1,6 +1,33 @@
-"""Job-shortlist pipeline: daily scrape and shortlist of new job postings.
+"""Job-shortlist pipeline: Scrape -> Normalize -> Screen -> Diff -> Render.
 
-Not implemented yet. Unlike company discovery, the unit here is the posting,
-filters are tight, and runs are incremental, so this pipeline will need its own
-seen-postings state store.
+Where company discovery asks which companies nearby employ engineers, this
+asks which postings are worth applying to. The unit is the posting, filters
+are tight, and runs are scheduled, so this pipeline needs its own
+seen-postings state store that company discovery has no use for.
+
+The scrape stage is shared and lives in ``common.scrape``.
 """
+
+from hiringcafe_toolkit.job_shortlist.normalize import (
+    NormalizeResult,
+    Posting,
+    calibrate_similarity,
+    deduplicate,
+    fallback_key,
+    normalize_record,
+    normalized_title,
+    run_normalize,
+    similarity,
+)
+
+__all__ = [
+    "NormalizeResult",
+    "Posting",
+    "calibrate_similarity",
+    "deduplicate",
+    "fallback_key",
+    "normalize_record",
+    "normalized_title",
+    "run_normalize",
+    "similarity",
+]
