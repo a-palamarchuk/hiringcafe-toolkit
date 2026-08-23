@@ -219,7 +219,44 @@ def test_fallback_declines_to_merge_when_text_disagrees() -> None:
 
 def test_fallback_key_ignores_source_so_cross_ats_duplicates_still_merge() -> None:
     """Including source would block precisely the merges the key exists for."""
-    assert fallback_key(posting("a", source="icims")) == fallback_key(posting("b", source="icims2"))
+    assert posting("a", source="icims").fallback_key == posting("b", source="icims2").fallback_key
+
+
+def test_fallback_key_is_recorded_even_when_a_cluster_key_was_used() -> None:
+    """Cluster coverage varies between runs, so a posting can lose its key."""
+    result = posting("a", cluster="c1")
+
+    assert result.cluster_key == "c1"
+    assert result.fallback_key == fallback_key(
+        "Acme", "Software Engineer", ["Reston, Virginia, US"]
+    )
+
+
+def test_fallback_key_is_stable_against_city_ordering() -> None:
+    left = fallback_key("Acme", "Engineer", ["Boston, MA, US", "Reston, VA, US"])
+    right = fallback_key("Acme", "Engineer", ["Reston, VA, US", "Boston, MA, US"])
+
+    assert left == right
+
+
+def test_merged_postings_keep_every_object_id() -> None:
+    """The surviving listing depends on source and date, so it can change."""
+    members = [
+        posting("a", source="adhoc"),
+        posting("b", source="workday"),
+        posting("c", source="grnhse"),
+    ]
+    kept, _ = deduplicate(members, 0.5)
+
+    assert len(kept) == 1
+    assert kept[0].object_id == "b"
+    assert set(kept[0].alternate_object_ids) == {"a", "c"}
+
+
+def test_an_unmerged_posting_has_no_alternate_ids() -> None:
+    kept, _ = deduplicate([posting("a")], 0.5)
+
+    assert kept[0].alternate_object_ids == ()
 
 
 def test_level_variants_of_one_role_are_not_merged() -> None:

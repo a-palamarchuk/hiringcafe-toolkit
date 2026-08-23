@@ -116,8 +116,21 @@ class Posting:
     cluster_key: str | None
     dedup_key: str
     """How this posting was grouped: the cluster key, or the fallback tuple."""
+    fallback_key: str = ""
+    """The candidate key this posting would group under, recorded even when a
+    cluster key was used instead. Cluster coverage varies widely between runs -
+    measured at 76% on one slice and 31% on another - so a posting can gain or
+    lose its cluster key from one day to the next. Keeping both means a later
+    stage can still recognize it."""
     duplicate_count: int = 1
     """Listings collapsed into this one, including itself."""
+    alternate_object_ids: tuple[str, ...] = ()
+    """Ids of the listings collapsed into this one.
+
+    Which listing survives a merge depends on source preference and publish
+    date, so a new listing arriving tomorrow can displace today's survivor and
+    the same job would look new. Keeping every id lets a later stage match on
+    any of them."""
     alternate_apply_urls: tuple[str, ...] = ()
     """Apply links from the collapsed listings, kept because a derived link is
     a heuristic and the surviving one occasionally 404s."""
@@ -272,7 +285,8 @@ def normalize_record(record: Mapping[str, Any]) -> Posting:
     return Posting(
         object_id=_text(record.get("objectID")) or _text(record.get("id")),
         cluster_key=cluster,
-        dedup_key=cluster or "",  # filled in during deduplication
+        dedup_key=cluster or "",  # settled during deduplication
+        fallback_key=fallback_key(company, title, cities),
         title=title,
         raw_title=raw_title,
         company=company,
@@ -352,16 +366,18 @@ def calibrate_similarity(postings: Sequence[Posting]) -> tuple[float, int]:
     return percentiles[CALIBRATION_PERCENTILE - 1], len(scores)
 
 
-def fallback_key(posting: Posting) -> str:
+def fallback_key(company: str, title: str, cities: Sequence[str]) -> str:
     """Candidate key for records the API did not cluster.
+
+    Takes components rather than a ``Posting`` so it can be computed while one
+    is being built, and so a later stage can rebuild the key from stored fields
+    without constructing a posting first.
 
     Source is deliberately excluded. A true cross-ATS duplicate appears under
     different sources by definition, so including it would prevent exactly the
     merges this key exists to make.
     """
-    return "|".join(
-        (posting.company, normalized_title(posting.title), ",".join(sorted(posting.cities)))
-    )
+    return "|".join((company, normalized_title(title), ",".join(sorted(cities))))
 
 
 def _representative(members: Sequence[Posting]) -> Posting:
@@ -391,12 +407,16 @@ def _merge(members: Sequence[Posting], dedup_key: str) -> Posting:
     alternates = tuple(
         dict.fromkeys(m.apply_url for m in members if m.apply_url and m is not chosen)
     )
+    other_ids = tuple(
+        dict.fromkeys(m.object_id for m in members if m.object_id and m is not chosen)
+    )
     return Posting(
         **{
             **asdict(chosen),
             "dedup_key": dedup_key,
             "duplicate_count": len(members),
             "alternate_apply_urls": alternates,
+            "alternate_object_ids": other_ids,
         }
     )
 
@@ -441,7 +461,7 @@ def deduplicate(
         if posting.cluster_key:
             clustered.setdefault(posting.cluster_key, []).append(posting)
         else:
-            unclustered.setdefault(fallback_key(posting), []).append(posting)
+            unclustered.setdefault(posting.fallback_key, []).append(posting)
 
     kept: list[Posting] = []
     for key, members in clustered.items():
