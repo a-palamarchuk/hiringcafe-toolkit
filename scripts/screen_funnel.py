@@ -149,6 +149,38 @@ OPS_TITLE = re.compile(
     re.I,
 )
 
+#: Seniority and level markers, read from the raw posting title. Kept in sync
+#: with the normalize stage: core_job_title has these stripped, so the raw
+#: title is the only place a level survives.
+LEVEL_WORD = re.compile(
+    r"\b(?:junior|jr|associate|entry|mid|senior|snr|sr|staff|principal|lead|distinguished"
+    r"|fellow|apprentice|intern|trainee)\b",
+    re.I,
+)
+LEVEL_NUMBER = re.compile(
+    r"(?:^|[\s\-(,/])(?:l|t)?(i{1,3}|iv|vi{0,3}|[1-5](?:[._]\d)?)(?=$|[\s\-),/])",
+    re.I,
+)
+
+#: Title levels that indicate a senior individual contributor.
+SENIOR_LEVELS = frozenset(
+    {"sr", "staff", "principal", "lead", "distinguished", "fellow", "iii", "iv", "v", "3", "4", "5"}
+)
+
+#: Management corroboration for role_type. The field alone reads "Lead" and
+#: "Principal" as management, which are IC ladder titles at many employers.
+MANAGEMENT_TITLE = re.compile(
+    r"\bmanager\b|\bdirector\b|head of|\bvp\b|vice president|\bchief\b|supervisor"
+    r"|\bsupervisory\b|team lead\b|\bforeman\b",
+    re.I,
+)
+MANAGEMENT_LANGUAGE = re.compile(
+    r"direct reports?|supervis|performance review|managing (?:people|teams|staff)"
+    r"|manage (?:a )?(?:team|staff|people)|leading a team|hiring and|people manage"
+    r"|team of \d|budget responsib|\bp&l\b",
+    re.I,
+)
+
 #: Companies never worth surfacing. Unlike company discovery, where a bad
 #: company costs one glance, a staffing firm here can flood the list every day.
 COMPANY_BLOCKLIST: frozenset[str] = frozenset()
@@ -188,6 +220,48 @@ def comp_max(record: JsonDict) -> int | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     return int(value) if COMP_PLAUSIBLE[0] < value < COMP_PLAUSIBLE[1] else None
+
+
+def raw_title(record: JsonDict) -> str:
+    """The posting's own title, which retains the level core_job_title drops."""
+    info = sub(record, "job_information")
+    return text(info.get("job_title_raw")) or text(info.get("title"))
+
+
+def level_signature(title: str) -> str:
+    """Level tokens from a raw title, canonicalized and sorted."""
+    words = {m.group(0).lower().rstrip(".") for m in LEVEL_WORD.finditer(title)}
+    words = {"sr" if w in {"senior", "snr"} else "jr" if w == "junior" else w for w in words}
+    numbers = {m.group(1).lower().replace("_", ".") for m in LEVEL_NUMBER.finditer(title)}
+    return "+".join(sorted(words | numbers))
+
+
+def title_says_senior(record: JsonDict) -> bool:
+    """Whether the raw title carries a senior-IC level marker.
+
+    Used alongside seniority_level rather than instead of it: the vendor field
+    calls a "Senior Electronics Hardware Engineer" entry level and a "Desktop
+    Support Technician II" senior, in opposite directions, so neither signal
+    is trustworthy alone.
+    """
+    return bool(set(level_signature(raw_title(record)).split("+")) & SENIOR_LEVELS)
+
+
+def manages_people(record: JsonDict) -> bool:
+    """Whether People Manager is corroborated by the title or the requirements.
+
+    role_type on its own misreads IC ladder titles - "Principal Engineer",
+    "Sr. Lead Software Engineer" - as management. Requiring a second signal
+    keeps the reject while recovering the misclassified.
+    """
+    job = sub(record, "v5_processed_job_data")
+    if text(job.get("role_type")) != "People Manager":
+        return False
+    titles = f"{text(job.get('core_job_title'))} {raw_title(record)}"
+    return bool(
+        MANAGEMENT_TITLE.search(titles)
+        or MANAGEMENT_LANGUAGE.search(text(job.get("requirements_summary")))
+    )
 
 
 def company(record: JsonDict) -> str:
@@ -232,7 +306,7 @@ def reject_reasons(record: JsonDict, comp_floor: int) -> list[str]:
         reasons.append("clearance field")
     if CLEARANCE.search(haystack):
         reasons.append("clearance in text")
-    if text(job.get("role_type")) == "People Manager":
+    if manages_people(record):
         reasons.append("people manager")
     if text(job.get("position_employer_type")) == "External Position":
         reasons.append("staffing placement")
@@ -260,6 +334,9 @@ def demote_reasons(record: JsonDict) -> list[str]:
     """
     role_title = text(sub(record, "v5_processed_job_data").get("core_job_title"))
     reasons: list[str] = []
+    if text(sub(record, "v5_processed_job_data").get("role_type")) == "People Manager":
+        # Uncorroborated: not rejected, but not strong either.
+        reasons.append("uncorroborated people-manager flag")
     if CUSTOMER_FACING_TITLE.search(role_title):
         reasons.append("customer-facing title")
     if ANALYST_TITLE.search(role_title) and not ENGINEERING_TITLE.search(role_title):
@@ -288,8 +365,10 @@ def is_strong(record: JsonDict, comp_floor: int) -> bool:
     if demote_reasons(record):
         return False
     value = comp_max(record)
-    return text(job.get("seniority_level")) == "Senior Level" or (
-        value is not None and value >= comp_floor
+    return (
+        text(job.get("seniority_level")) == "Senior Level"
+        or title_says_senior(record)
+        or (value is not None and value >= comp_floor)
     )
 
 
@@ -317,6 +396,75 @@ def show(record: JsonDict) -> str:
     )
 
 
+def run_audit(records: list[JsonDict], which: str, limit: int) -> None:
+    """Measure how often a vendor-inferred field disagrees with the posting."""
+    if which == "role-type":
+        flagged = [
+            r
+            for r in records
+            if text(sub(r, "v5_processed_job_data").get("role_type")) == "People Manager"
+        ]
+        suspect = [r for r in flagged if not manages_people(r)]
+        engineering = [
+            r
+            for r in suspect
+            if BACKEND.search(joined(sub(r, "v5_processed_job_data").get("technical_tools")))
+        ]
+        section("role_type reliability")
+        print(f"  role_type == People Manager        {len(flagged):6d}")
+        print(
+            f"  uncorroborated by title or text    {len(suspect):6d}"
+            f"   {len(suspect) / max(len(flagged), 1) * 100:5.1f}% of flagged"
+        )
+        print(
+            f"  ...and backend-tooled              {len(engineering):6d}"
+            f"   {len(engineering) / max(len(flagged), 1) * 100:5.1f}% of flagged,"
+            f" {len(engineering) / len(records) * 100:.1f}% of scrape"
+        )
+        print("\n  These are hard-rejected today and would be recovered by requiring")
+        print("  corroboration. Read a few before deciding they are worth recovering.\n")
+        for record in sorted(engineering, key=lambda r: -(comp_max(r) or 0))[:limit]:
+            print(show(record))
+            print(f"            raw title: {raw_title(record)[:88]}")
+        return
+
+    section("seniority_level vs the raw title's level marker")
+    rows = [
+        (
+            r,
+            text(sub(r, "v5_processed_job_data").get("seniority_level")),
+            level_signature(raw_title(r)),
+        )
+        for r in records
+    ]
+    titled = [(r, lvl, sig) for r, lvl, sig in rows if sig]
+    senior_title = [(r, lvl, sig) for r, lvl, sig in titled if title_says_senior(r)]
+    missed = [(r, lvl, sig) for r, lvl, sig in senior_title if lvl != "Senior Level"]
+    junior_title = [
+        (r, lvl, sig)
+        for r, lvl, sig in titled
+        if not title_says_senior(r) and lvl == "Senior Level"
+    ]
+    print(f"  records with a level marker in the title   {len(titled):6d}")
+    print(
+        f"  title says senior, field does not          {len(missed):6d}"
+        f"   (would be wrongly demoted)"
+    )
+    print(
+        f"  field says senior, title says otherwise    {len(junior_title):6d}"
+        f"   (would be wrongly promoted)"
+    )
+    print("\n  Both directions matter: the first loses roles, the second floods the list.\n")
+    for label, group in (("MISSED", missed), ("PROMOTED", junior_title)):
+        print(f"  --- {label} ---")
+        for record, lvl, sig in group[: limit // 2]:
+            print(
+                f"  field={lvl or 'None':12s} title-level={sig:12s} "
+                f"{raw_title(record)[:56]:56s} {company(record)[:20]}"
+            )
+        print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("jobs", type=Path)
@@ -329,12 +477,23 @@ def main() -> None:
         "compensation alone and otherwise strong.",
     )
     parser.add_argument("--limit", type=int, default=60)
+    parser.add_argument(
+        "--audit",
+        choices=["role-type", "seniority"],
+        help="Print a field-reliability audit instead of the funnel. 'role-type' "
+        "lists People Manager records that look like IC engineering roles; "
+        "'seniority' compares seniority_level against the raw title's level marker.",
+    )
     args = parser.parse_args()
 
     records = list(read_records(args.jobs))
     if not records:
         raise SystemExit(f"{args.jobs}: no records")
     floor = args.comp_floor
+
+    if args.audit:
+        run_audit(records, args.audit, args.limit)
+        return
 
     reasons_by_record = [(r, reject_reasons(r, floor)) for r in records]
     survivors_raw = [r for r, reasons in reasons_by_record if not reasons]
