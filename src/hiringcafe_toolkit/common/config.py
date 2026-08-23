@@ -158,6 +158,22 @@ def _scrape_settings(data: dict[str, Any], path: Path) -> ScrapeSettings:
     )
 
 
+def _visit_log_path(data: dict[str, Any], path: Path) -> Path | None:
+    """Resolve [visit_logger].export_path, shared by both pipelines.
+
+    Optional in both. The export is produced by hand from the browser, so a
+    configured path that does not exist yet is a normal state rather than a
+    misconfiguration, and the stages that read it degrade instead of failing.
+    """
+    table = data.get("visit_logger", {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [visit_logger] must be a table")
+    raw = table.get("export_path")
+    if raw is not None and not isinstance(raw, str):
+        raise ConfigError(f"{path}: [visit_logger].export_path must be a string")
+    return _resolve(raw, path) if raw else None
+
+
 def _searchstate_path(data: dict[str, Any], path: Path) -> Path:
     """Resolve [search].searchstate_path, required by every pipeline."""
     search = _require_table(data, "search", path)
@@ -226,13 +242,7 @@ def load_company_discovery_config(path: Path) -> CompanyDiscoveryConfig:
         ),
     )
 
-    visit_logger_table = data.get("visit_logger", {})
-    if not isinstance(visit_logger_table, dict):
-        raise ConfigError(f"{path}: [visit_logger] must be a table")
-    raw_visit_log = visit_logger_table.get("export_path")
-    if raw_visit_log is not None and not isinstance(raw_visit_log, str):
-        raise ConfigError(f"{path}: [visit_logger].export_path must be a string")
-    visit_log_path = _resolve(raw_visit_log, path) if raw_visit_log else None
+    visit_log_path = _visit_log_path(data, path)
 
     return CompanyDiscoveryConfig(
         searchstate_path=state_path,
@@ -296,6 +306,10 @@ class JobShortlistConfig:
     searchstate_path: Path
     scrape: ScrapeSettings
     screen: ScreenSettings = ScreenSettings()
+    visit_log_path: Path | None = None
+    """VisitLogger export. Read by the diff stage for `opened` and `applied`
+    labels, and by render to mark employers already applied to. Neither depends
+    on it, so an absent file costs data rather than a run."""
 
 
 def _positive_int(table: dict[str, Any], key: str, default: int, path: Path) -> int:
@@ -341,4 +355,5 @@ def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
         searchstate_path=_searchstate_path(data, path),
         scrape=_scrape_settings(data, path),
         screen=_screen_settings(data, path),
+        visit_log_path=_visit_log_path(data, path),
     )

@@ -543,7 +543,10 @@ def job_shortlist_diff(
     ] = SHORTLIST_STATE_PATH,
     visit_log: Annotated[
         Path | None,
-        typer.Option("--visit-log", help="VisitLogger export, for opened/applied labels."),
+        typer.Option(
+            "--visit-log",
+            help="VisitLogger export. Defaults to visit_logger.export_path in the config.",
+        ),
     ] = None,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Report without updating the store.")
@@ -562,6 +565,7 @@ def job_shortlist_diff(
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
 
+    log_path = visit_log if visit_log is not None else settings.visit_log_path
     screened_path = screened if screened is not None else _newest(processed_dir, SCREENED_GLOB)
     typer.echo(f"Source: {screened_path}")
     typer.echo(f"Store:  {store}")
@@ -570,7 +574,7 @@ def job_shortlist_diff(
         read_jsonl(screened_path),
         out_dir,
         store,
-        visit_log_path=visit_log,
+        visit_log_path=log_path,
         source_path=screened_path,
         compress=settings.scrape.compress and not no_compress,
         dry_run=dry_run,
@@ -586,12 +590,12 @@ def job_shortlist_diff(
     for band in ("strong", "possible"):
         typer.echo(f"  {band:18s} {result.bands.get(band, 0):6d}")
     typer.echo(f"  store entries      {result.store_size:6d}")
-    if visit_log:
+    if log_path:
         typer.echo(f"  opened / applied   {result.opened:6d} / {result.applied}")
     else:
         typer.secho(
-            "\n  No --visit-log given, so no opened/applied labels were recorded. "
-            "Those can only be collected going forward.",
+            "\n  No visit log configured or given, so no opened/applied labels were "
+            "recorded. Those can only be collected going forward.",
             fg=typer.colors.YELLOW,
         )
     if dry_run:
@@ -600,6 +604,9 @@ def job_shortlist_diff(
 
 @job_shortlist_app.command("render")
 def job_shortlist_render(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
     shortlist: Annotated[
         Path | None,
         typer.Option("--shortlist", "-s", help="Shortlist JSONL. Defaults to the newest."),
@@ -617,22 +624,34 @@ def job_shortlist_render(
     ] = None,
     visit_log: Annotated[
         Path | None,
-        typer.Option("--visit-log", help="VisitLogger export, to flag companies applied to."),
+        typer.Option(
+            "--visit-log",
+            help="VisitLogger export. Defaults to visit_logger.export_path in the config.",
+        ),
     ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
 ) -> None:
     """Render the shortlist as a VisitLogger-compatible page."""
     _configure_logging(verbose)
 
+    try:
+        settings = load_job_shortlist_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    log_path = visit_log if visit_log is not None else settings.visit_log_path
     shortlist_path = shortlist if shortlist is not None else _newest(processed_dir, SHORTLIST_GLOB)
     stamp = shortlist_path.name.removeprefix("shortlist-").split(".")[0]
     out_path = out if out is not None else processed_dir / f"shortlist-{stamp}.html"
 
     applied: frozenset[str] = frozenset()
-    if visit_log is not None:
+    if log_path is not None:
         try:
-            applied = load_visit_log(visit_log).applied_hosts
+            applied = load_visit_log(log_path).applied_hosts
         except VisitLogError as exc:
+            # The export is made by hand, so a missing one is a normal state.
+            # The markers are informational; losing them must not stop a render.
             typer.secho(f"{exc} - continuing without applied markers", fg=typer.colors.YELLOW)
 
     result = run_shortlist_render(

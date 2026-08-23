@@ -237,3 +237,30 @@ def test_unique_path_keeps_counting(tmp_path: Path) -> None:
         (tmp_path / name).write_text("", encoding="utf-8")
 
     assert unique_path(tmp_path / "meta-x.json").name == "meta-x-3.json"
+
+
+def test_job_shortlist_config_reads_the_visit_log_path(tmp_path: Path) -> None:
+    """Shared with company discovery, so both stages default to one place."""
+    path = write_shortlist_config(
+        tmp_path,
+        '[search]\nsearchstate_path = "s.json"\n'
+        '[visit_logger]\nexport_path = "../data/inputs/visits.json"\n',
+    )
+    config = load_job_shortlist_config(path)
+
+    assert config.visit_log_path == (tmp_path.parent / "data/inputs/visits.json").resolve()
+
+
+def test_job_shortlist_config_leaves_the_visit_log_unset_when_absent(tmp_path: Path) -> None:
+    """It is optional: the export is made by hand and may not exist yet."""
+    path = write_shortlist_config(tmp_path, '[search]\nsearchstate_path = "s.json"\n')
+
+    assert load_job_shortlist_config(path).visit_log_path is None
+
+
+def test_job_shortlist_config_rejects_a_non_string_visit_log_path(tmp_path: Path) -> None:
+    path = write_shortlist_config(
+        tmp_path, '[search]\nsearchstate_path = "s.json"\n[visit_logger]\nexport_path = 7\n'
+    )
+    with pytest.raises(ConfigError, match="export_path must be a string"):
+        load_job_shortlist_config(path)

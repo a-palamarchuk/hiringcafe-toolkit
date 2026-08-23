@@ -45,3 +45,14 @@ wide_geography_cities = 5
 # a staffing firm here can flood the list every day. Populate this from the
 # repeat offenders in the screen output rather than guessing up front.
 company_blocklist = []
+
+[visit_logger]
+# JSON export from the VisitLogger browser extension. Read by the diff stage for
+# `opened` and `applied` labels, and by render to mark employers a resume has
+# already gone to. Neither suppression nor rendering depends on it, so an absent
+# file costs data rather than a run. Relative paths resolve against this file.
+#
+# Shared with the company-discovery pipeline: the extension exports all of local
+# storage as one object, and posting keys are prefixed `job:` to keep the two
+# apart. Point both configs at the same file.
+export_path = "../data/inputs/visitlogger-export.json"

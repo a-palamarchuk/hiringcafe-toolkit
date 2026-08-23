@@ -29,7 +29,5 @@ shortlist:
 	uv run hiringcafe-toolkit job-shortlist scrape
 	uv run hiringcafe-toolkit job-shortlist normalize
 	uv run hiringcafe-toolkit job-shortlist screen
-	uv run hiringcafe-toolkit job-shortlist diff \
-		--visit-log data/inputs/visitlogger-export.json
-	uv run hiringcafe-toolkit job-shortlist render \
-		--visit-log data/inputs/visitlogger-export.json
+	uv run hiringcafe-toolkit job-shortlist diff
+	uv run hiringcafe-toolkit job-shortlist render

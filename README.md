@@ -435,7 +435,6 @@ with no warning. It is gitignored like the rest of `data/`, and it stays small -
 ```bash
 uv run hiringcafe-toolkit job-shortlist render
 uv run hiringcafe-toolkit job-shortlist render --band strong
-uv run hiringcafe-toolkit job-shortlist render --visit-log data/inputs/visitlogger-export.json
 ```
 
 Writes `shortlist-<timestamp>.html` beside the shortlist it was built from, ready for the
@@ -472,9 +471,10 @@ Columns carry the qualifications that make a number readable rather than mislead
 compensation is flagged `hourly` when annualized from an hourly rate, and `N metros` when
 the posting spans enough cities that its ceiling belongs to the priciest one. Demote
 reasons are shown, since why a posting is only `possible` is the judgement being made when
-skimming. With `--visit-log`, companies you have already sent a resume to are marked -
-shown rather than filtered, because two genuinely distinct roles at one employer can both
-be worth applying to.
+skimming. Companies you have already sent a resume to are marked - shown rather than
+filtered, because two genuinely distinct roles at one employer can both be worth applying
+to. That reads the visit log configured under `[visit_logger]`, shared with the
+company-discovery pipeline; `--visit-log` overrides it.
 
 #### Running it daily
 
@@ -488,8 +488,8 @@ which is the four stages in order:
 uv run hiringcafe-toolkit job-shortlist scrape
 uv run hiringcafe-toolkit job-shortlist normalize
 uv run hiringcafe-toolkit job-shortlist screen
-uv run hiringcafe-toolkit job-shortlist diff --visit-log data/inputs/visitlogger-export.json
-uv run hiringcafe-toolkit job-shortlist render --visit-log data/inputs/visitlogger-export.json
+uv run hiringcafe-toolkit job-shortlist diff
+uv run hiringcafe-toolkit job-shortlist render
 ```
 
 Chain them with `make` or `&&`, never `;`. Every stage defaults to the newest file from the
@@ -497,9 +497,11 @@ one before, so a failed scrape would otherwise have the rest quietly reprocess y
 data and report a shortlist of zero - which looks like a quiet day rather than a broken run.
 
 **Export the visit log before running, not after.** The export is a manual step in the
-extension, and `diff` reads it to attach `opened` and `applied` labels. A stale or missing
-export only means the labels lag; suppression does not depend on it, and a missing file
-warns rather than failing.
+extension. `diff` reads it to attach `opened` and `applied` labels, and `render` reads it
+to mark employers already applied to; both take the path from `[visit_logger].export_path`
+rather than a flag, so neither can be silently skipped. A stale or missing export only
+means the labels lag - nothing in the pipeline depends on them, and a missing file warns
+rather than failing.
 
 **Daily is a target, not a requirement.** The 21-day fetch window is three weeks of
 missed-run slack, so skipping a week costs nothing. Rendered pages are never overwritten
