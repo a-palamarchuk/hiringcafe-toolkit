@@ -44,3 +44,21 @@ def normalize_host(value: str | None) -> str | None:
 def host_to_url(host: str) -> str:
     """Render a normalized host as a link target."""
     return f"https://{host}"
+
+
+#: Prefix marking a VisitLogger key as a job posting rather than a company host.
+#:
+#: The extension exports all of local storage as one flat object, so both
+#: pipelines' keys share a file. The prefix keeps them apart without changing
+#: the extension: it contains no dot, so host normalization rejects it, and it
+#: cannot collide with an ATS domain.
+POSTING_KEY_PREFIX = "job:"
+
+
+def posting_key(object_id: str) -> str:
+    """The VisitLogger key for a posting.
+
+    Not passed through ``normalize_host``: that lower-cases, and posting ids
+    are case-sensitive, so normalizing would silently break every lookup.
+    """
+    return f"{POSTING_KEY_PREFIX}{object_id}"

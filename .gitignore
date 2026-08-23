@@ -31,6 +31,11 @@ data/job_shortlist/raw/*
 data/job_shortlist/interim/*
 data/job_shortlist/processed/*
 
+# Seen-postings store. Ignored like the rest of data/, but unlike the other
+# generated files this one cannot be regenerated: losing it re-surfaces every
+# posting with no warning. Back it up separately.
+data/job_shortlist/state/*
+
 # Local inputs (the VisitLogger export is personal browsing history)
 data/inputs/*
 

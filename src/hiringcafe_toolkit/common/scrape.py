@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from hiringcafe_toolkit.api import HiringCafeError, ResultPage, record_key
-from hiringcafe_toolkit.common.jsonl import JsonlWriter, with_compression
+from hiringcafe_toolkit.common.jsonl import JsonlWriter, unique_path, with_compression
 
 JsonDict = dict[str, Any]
 
@@ -80,8 +80,8 @@ def run_scrape(
     """Scrape one search and write raw records plus a meta sidecar."""
     stamp = _timestamp()
     out_dir.mkdir(parents=True, exist_ok=True)
-    jobs_path = with_compression(out_dir / f"jobs-{stamp}.jsonl", compress)
-    meta_path = out_dir / f"meta-{stamp}.json"
+    jobs_path = unique_path(with_compression(out_dir / f"jobs-{stamp}.jsonl", compress))
+    meta_path = unique_path(out_dir / f"meta-{stamp}.json")
 
     seen_keys: set[str] = set()
     keyless_records = 0

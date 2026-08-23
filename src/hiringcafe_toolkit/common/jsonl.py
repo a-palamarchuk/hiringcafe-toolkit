@@ -108,3 +108,24 @@ class JsonlWriter:
     def close(self) -> None:
         if not self._handle.closed:
             self._handle.close()
+
+
+def unique_path(path: Path) -> Path:
+    """A path that does not already exist, suffixing ``-2``, ``-3``, ... if needed.
+
+    Stage outputs are stamped to the second, so two runs inside one second
+    would otherwise write the same name and the later silently replace the
+    earlier. That is cheap to prevent and expensive to notice.
+    """
+    if not path.exists():
+        return path
+    stem = path.name
+    suffixes = ""
+    while "." in stem:
+        stem, dot, tail = stem.rpartition(".")
+        suffixes = f"{dot}{tail}{suffixes}"
+    for attempt in range(2, 1000):
+        candidate = path.with_name(f"{stem}-{attempt}{suffixes}")
+        if not candidate.exists():
+            return candidate
+    raise OSError(f"{path}: could not find an unused name")

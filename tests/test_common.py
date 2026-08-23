@@ -18,6 +18,7 @@ from hiringcafe_toolkit.common.jsonl import (
     JsonlWriter,
     is_compressed,
     read_jsonl,
+    unique_path,
     with_compression,
 )
 
@@ -215,3 +216,24 @@ def test_with_compression_is_idempotent_both_ways() -> None:
     assert with_compression(gz, False) == plain
     assert with_compression(plain, False) == plain
     assert is_compressed(gz) and not is_compressed(plain)
+
+
+def test_unique_path_leaves_a_free_name_alone(tmp_path: Path) -> None:
+    assert (
+        unique_path(tmp_path / "jobs-2026-01-01.jsonl.gz") == tmp_path / "jobs-2026-01-01.jsonl.gz"
+    )
+
+
+def test_unique_path_suffixes_before_the_extensions(tmp_path: Path) -> None:
+    """Stamps are per-second, so two runs in one second would collide."""
+    first = tmp_path / "jobs-2026-01-01.jsonl.gz"
+    first.write_text("", encoding="utf-8")
+
+    assert unique_path(first).name == "jobs-2026-01-01-2.jsonl.gz"
+
+
+def test_unique_path_keeps_counting(tmp_path: Path) -> None:
+    for name in ("meta-x.json", "meta-x-2.json"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    assert unique_path(tmp_path / "meta-x.json").name == "meta-x-3.json"

@@ -8,6 +8,15 @@ seen-postings state store that company discovery has no use for.
 The scrape stage is shared and lives in ``common.scrape``.
 """
 
+from hiringcafe_toolkit.job_shortlist.diff import (
+    DiffResult,
+    SeenEntry,
+    SeenStore,
+    load_seen_store,
+    match_keys,
+    run_diff,
+    save_seen_store,
+)
 from hiringcafe_toolkit.job_shortlist.normalize import (
     NormalizeResult,
     Posting,
@@ -30,6 +39,13 @@ from hiringcafe_toolkit.job_shortlist.screen import (
 )
 
 __all__ = [
+    "DiffResult",
+    "SeenEntry",
+    "SeenStore",
+    "load_seen_store",
+    "match_keys",
+    "run_diff",
+    "save_seen_store",
     "NormalizeResult",
     "Posting",
     "calibrate_similarity",

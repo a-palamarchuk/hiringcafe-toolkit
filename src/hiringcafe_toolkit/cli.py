@@ -31,6 +31,7 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
     load_visit_log,
     run_filter,
 )
+from hiringcafe_toolkit.job_shortlist.diff import run_diff
 from hiringcafe_toolkit.job_shortlist.normalize import run_normalize
 from hiringcafe_toolkit.job_shortlist.screen import run_screen
 
@@ -45,6 +46,9 @@ SHORTLIST_INTERIM_DIR = Path("data/job_shortlist/interim")
 SHORTLIST_PROCESSED_DIR = Path("data/job_shortlist/processed")
 
 POSTINGS_GLOB = "postings-*.jsonl*"
+SCREENED_GLOB = "screened-*.jsonl*"
+
+SHORTLIST_STATE_PATH = Path("data/job_shortlist/state/seen.jsonl")
 
 #: Raw scrape output may be gzipped or not; stages accept either, so lookups
 #: glob both rather than assuming whichever the last run happened to write.
@@ -514,6 +518,81 @@ def job_shortlist_screen(
             f"Grep the output for them before moving the floor.",
             fg=typer.colors.CYAN,
         )
+
+
+@job_shortlist_app.command("diff")
+def job_shortlist_diff(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+    screened: Annotated[
+        Path | None,
+        typer.Option("--screened", "-s", help="Screened JSONL. Defaults to the newest."),
+    ] = None,
+    processed_dir: Annotated[
+        Path, typer.Option("--processed-dir", help="Where to look for screened output.")
+    ] = SHORTLIST_PROCESSED_DIR,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for the shortlist.")
+    ] = SHORTLIST_PROCESSED_DIR,
+    store: Annotated[
+        Path, typer.Option("--store", help="Seen-postings store.")
+    ] = SHORTLIST_STATE_PATH,
+    visit_log: Annotated[
+        Path | None,
+        typer.Option("--visit-log", help="VisitLogger export, for opened/applied labels."),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Report without updating the store.")
+    ] = False,
+    no_compress: Annotated[
+        bool, typer.Option("--no-compress", help="Write the shortlist uncompressed.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Drop postings already surfaced by a previous run."""
+    _configure_logging(verbose)
+
+    try:
+        settings = load_job_shortlist_config(config)
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    screened_path = screened if screened is not None else _newest(processed_dir, SCREENED_GLOB)
+    typer.echo(f"Source: {screened_path}")
+    typer.echo(f"Store:  {store}")
+
+    result = run_diff(
+        read_jsonl(screened_path),
+        out_dir,
+        store,
+        visit_log_path=visit_log,
+        source_path=screened_path,
+        compress=settings.scrape.compress and not no_compress,
+        dry_run=dry_run,
+    )
+
+    typer.echo("")
+    typer.echo(f"Shortlist: {result.shortlist_path} ({result.surfaced})")
+    typer.echo(f"Meta:      {result.meta_path}")
+    typer.echo("")
+    typer.echo(f"  new                {result.new_postings:6d}")
+    typer.echo(f"  promoted           {result.promoted:6d}")
+    typer.echo(f"  suppressed         {result.suppressed:6d}")
+    for band in ("strong", "possible"):
+        typer.echo(f"  {band:18s} {result.bands.get(band, 0):6d}")
+    typer.echo(f"  store entries      {result.store_size:6d}")
+    if visit_log:
+        typer.echo(f"  opened / applied   {result.opened:6d} / {result.applied}")
+    else:
+        typer.secho(
+            "\n  No --visit-log given, so no opened/applied labels were recorded. "
+            "Those can only be collected going forward.",
+            fg=typer.colors.YELLOW,
+        )
+    if dry_run:
+        typer.secho("\n  Dry run: the store was not updated.", fg=typer.colors.CYAN)
 
 
 if __name__ == "__main__":

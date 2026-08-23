@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from hiringcafe_toolkit.common.config import ScreenSettings
-from hiringcafe_toolkit.common.jsonl import JsonlWriter, with_compression
+from hiringcafe_toolkit.common.jsonl import JsonlWriter, unique_path, with_compression
 from hiringcafe_toolkit.job_shortlist.normalize import Posting, level_signature
 
 JsonDict = dict[str, Any]
@@ -389,8 +389,8 @@ def run_screen(
 
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
-    screened_path = with_compression(out_dir / f"screened-{stamp}.jsonl", compress)
-    meta_path = out_dir / f"screen-meta-{stamp}.json"
+    screened_path = unique_path(with_compression(out_dir / f"screened-{stamp}.jsonl", compress))
+    meta_path = unique_path(out_dir / f"screen-meta-{stamp}.json")
 
     order = {BAND_STRONG: 0, BAND_POSSIBLE: 1, BAND_REJECTED: 2}
     verdicts.sort(key=lambda v: (order[v.band], -(v.posting.comp_max or 0), v.posting.company))

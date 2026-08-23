@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from hiringcafe_toolkit.common.jsonl import JsonlWriter
-from hiringcafe_toolkit.common.urls import normalize_host
+from hiringcafe_toolkit.common.urls import POSTING_KEY_PREFIX, normalize_host
 
 JsonDict = dict[str, Any]
 
@@ -47,6 +47,9 @@ class VisitLog:
 
     entries_read: int
     unusable_keys: tuple[str, ...]
+    posting_keys: int = 0
+    """Keys belonging to the job-shortlist pipeline, skipped rather than counted
+    as unusable. The export is one flat object, so both pipelines share it."""
 
 
 def load_visit_log(path: Path) -> VisitLog:
@@ -65,7 +68,15 @@ def load_visit_log(path: Path) -> VisitLog:
     hosts: set[str] = set()
     applied: set[str] = set()
     unusable: list[str] = []
+    posting_keys = 0
     for key, value in parsed.items():
+        if isinstance(key, str) and key.startswith(POSTING_KEY_PREFIX):
+            # The export is one flat object, so the job-shortlist pipeline's
+            # posting keys share this file. They are a recognized category, not
+            # a normalization failure - counting them as unusable would bury
+            # the diagnostic that field exists for under thousands of entries.
+            posting_keys += 1
+            continue
         host = normalize_host(key)
         if host is None:
             unusable.append(str(key))
@@ -79,6 +90,7 @@ def load_visit_log(path: Path) -> VisitLog:
         applied_hosts=frozenset(applied),
         entries_read=len(parsed),
         unusable_keys=tuple(unusable),
+        posting_keys=posting_keys,
     )
 
 

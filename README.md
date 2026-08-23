@@ -381,6 +381,55 @@ zcat data/job_shortlist/processed/screened-*.jsonl.gz \
   | jq -r 'select(.reject_reasons == ["comp below floor"]) | "\(.comp_max)\t\(.raw_title)\t\(.company)"'
 ```
 
+#### Stage 4: diff
+
+```bash
+uv run hiringcafe-toolkit job-shortlist diff
+uv run hiringcafe-toolkit job-shortlist diff --visit-log data/inputs/visits.json
+uv run hiringcafe-toolkit job-shortlist diff --dry-run
+```
+
+Drops postings a previous run already surfaced, writing to
+`data/job_shortlist/processed/` and updating `data/job_shortlist/state/seen.jsonl`:
+
+| File | Contents |
+|---|---|
+| `shortlist-<timestamp>.jsonl.gz` | Postings to render: new since the last run, plus any promoted band |
+| `diff-meta-<timestamp>.json` | New, promoted, suppressed and store counts |
+| `state/seen.jsonl` | One line per posting ever surfaced. **Not regenerable** |
+
+**How identity is decided.** A posting is recognized by the ids of every listing merged
+into it, plus the vendor's cluster key. Which listing survives a merge depends on source
+preference and publish date, so tomorrow's run can pick a different representative for
+the same job - keeping every id is what stops that looking new.
+
+Content-derived keys were tried and rejected. A key of company, title and level collides
+across genuinely distinct postings: on 116 surfaced postings it merged Capital One's
+"Senior Lead Software Engineer, Front End Web" with its "Sr. Lead Software Engineer -
+Back End", and Exiger's "Tech Lead/Principal Engineer" with its "Database Engineer". The
+normalize stage separates those with a text-similarity check that a bare key cannot
+replicate, so matching on content here would undo the stage before it.
+
+The asymmetry decides it: failing to suppress a repost costs one glance, while
+suppressing a distinct posting removes it from every future render and nothing says so.
+
+**Suppression is seen-only, and independent of the browser.** The store records what the
+pipeline surfaced; VisitLogger records what was opened. Keeping them separate means a
+browser-side gap can never hide a posting - the visit log only attaches `opened` and
+`applied` labels, so skipping it costs data for later analysis and nothing else.
+
+Rendered pages are never overwritten, so a backlog stays readable in the file it was
+first rendered into. A posting is re-surfaced only when its band improves, which is what
+lets a rule change resurrect something previously shown as `possible`.
+
+**Rejected postings are never stored.** They were never shown, so a rule change that
+promotes one surfaces it on the next run with no special handling.
+
+**The store is the one file worth backing up.** Everything else in `data/` regenerates
+from the raw scrape in seconds; this does not, and losing it re-surfaces every posting
+with no warning. It is gitignored like the rest of `data/`, and it stays small - about
+390 bytes per posting, so roughly 4 MB after a year of daily runs.
+
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
 snapshot, which reaches several GB within a year uncompressed. Reading accepts both forms

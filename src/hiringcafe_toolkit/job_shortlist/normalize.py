@@ -47,7 +47,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-from hiringcafe_toolkit.common.jsonl import JsonlWriter, with_compression
+from hiringcafe_toolkit.common.jsonl import JsonlWriter, unique_path, with_compression
 from hiringcafe_toolkit.common.urls import normalize_host
 
 JsonDict = dict[str, Any]
@@ -515,8 +515,8 @@ def run_normalize(
     """Flatten and deduplicate a raw scrape, writing postings plus a sidecar."""
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
-    postings_path = with_compression(out_dir / f"postings-{stamp}.jsonl", compress)
-    meta_path = out_dir / f"normalize-meta-{stamp}.json"
+    postings_path = unique_path(with_compression(out_dir / f"postings-{stamp}.jsonl", compress))
+    meta_path = unique_path(out_dir / f"normalize-meta-{stamp}.json")
 
     postings = [normalize_record(record) for record in records]
     calibrated, ground_truth_groups = calibrate_similarity(postings)
