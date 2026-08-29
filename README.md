@@ -398,6 +398,18 @@ Drops postings a previous run already surfaced, writing to
 | `diff-meta-<timestamp>.json` | New, promoted, suppressed and store counts |
 | `state/seen.jsonl` | One line per posting ever surfaced. **Not regenerable** |
 
+**Two application labels, kept apart.** `applied` means a resume went in for *that
+posting*, set by F9 on the posting's own tab. `company_applied` means a resume went to that
+*employer*, set by F9 on their page or recorded from any earlier visit. Browsing a
+company's own listings and applying to something found there sets the second and not the
+first, because the role applied to need not be the one that surfaced. Merging them would
+make it impossible to tell whether the screen picked the right posting or merely the right
+company - which is the distinction the labels exist to measure.
+
+Employer hosts are matched by domain rather than exact string: the log records whichever
+host was opened, often a careers subdomain like `careers.appian.com`, while the posting
+carries the registrable domain from the company's homepage.
+
 **How identity is decided.** A posting is recognized by the ids of every listing merged
 into it, plus the vendor's cluster key. Which listing survives a merge depends on source
 preference and publish date, so tomorrow's run can pick a different representative for
@@ -506,8 +518,10 @@ On a first run, skip to step 3.
 It opens five tabs at a time, refilling as you close them, and skips anything already
 marked. Each row opens the employer's page first, then the posting.
 
-**2. Press F9 on any posting you applied to, before closing its tab.** That sets the `R`
-badge and is the only source of the `applied` label. It works because the tab was opened
+**2. Press F9 on whatever you applied through, before closing its tab.** That sets the `R`
+badge and is the only source of an application label. F9 on the posting's tab records
+`applied`; F9 on the employer's tab records `company_applied`, which is the one to use when
+you browsed their listings and applied to something found there. It works because the tab was opened
 from the queue: F9 acts on the link's key rather than the tab's own host, so the mark lands
 on the posting even though the tab shows an ATS. A posting opened by hand - middle-clicked,
 or from anywhere but the queue - has no such key, and F9 will be refused for the vendor
@@ -543,9 +557,10 @@ data and report a shortlist of zero - which reads as a quiet day rather than a b
   the result set ended.
 - `diff` - `suppressed` should be most of the screened postings on a normal day. Near zero
   means the store is not being found; near everything means nothing new arrived.
-- `diff` - `opened / applied` should be non-zero once you have worked a page. Zero after a
-  session means the queue marks are not reaching the store, and the labels for that session
-  are gone.
+- `diff` - `opened` should be non-zero once you have worked a page. Zero after a session
+  means the queue marks are not reaching the store, and that session's labels are gone.
+  `applied to posting` and `applied at company` can each legitimately be zero, depending on
+  whether you applied from the posting or from the employer's own listings.
 
 **6. Open the new page** in `data/job_shortlist/processed/`, and go back to step 1 next time.
 

@@ -270,3 +270,16 @@ def test_an_empty_shortlist_still_renders_a_page(tmp_path: Path) -> None:
 
     assert result.rows == 0
     assert "<tbody>" in out.read_text(encoding="utf-8")
+
+
+def test_the_applied_marker_matches_a_careers_subdomain() -> None:
+    """An exact-host check silently misses careers.<company> and reads as 'not applied'."""
+    markup = render_html([row()], "t", applied_hosts=frozenset({"careers.acme.com"}))
+
+    assert "resume sent" in markup
+
+
+def test_the_applied_marker_ignores_a_lookalike_domain() -> None:
+    markup = render_html([row()], "t", applied_hosts=frozenset({"notacme.com"}))
+
+    assert "resume sent" not in markup

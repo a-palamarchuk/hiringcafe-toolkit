@@ -62,3 +62,27 @@ def posting_key(object_id: str) -> str:
     are case-sensitive, so normalizing would silently break every lookup.
     """
     return f"{POSTING_KEY_PREFIX}{object_id}"
+
+
+def host_covers(owner: str, candidate: str) -> bool:
+    """Whether ``candidate`` belongs to the employer that owns ``owner``.
+
+    True for the host itself and for any subdomain of it. Needed because the
+    visit log records whatever host was actually opened, which is often a
+    careers subdomain - ``careers.appian.com``, ``careers.confluent.io`` - while
+    the pipeline stores the registrable domain from the company's homepage. An
+    exact comparison silently misses those, and the miss looks like "no resume
+    sent here" rather than like a bug.
+    """
+    owner = normalize_host(owner) or ""
+    candidate = normalize_host(candidate) or ""
+    if not owner or not candidate:
+        return False
+    return candidate == owner or candidate.endswith(f".{owner}")
+
+
+def applied_to(host: str | None, applied_hosts: frozenset[str]) -> bool:
+    """Whether a resume has gone to this employer, under any of its hosts."""
+    if not host:
+        return False
+    return any(host_covers(host, candidate) for candidate in applied_hosts)

@@ -43,7 +43,7 @@ from hiringcafe_toolkit.common.jsonl import (
     unique_path,
     with_compression,
 )
-from hiringcafe_toolkit.common.urls import posting_key
+from hiringcafe_toolkit.common.urls import POSTING_KEY_PREFIX, applied_to, posting_key
 from hiringcafe_toolkit.job_shortlist.normalize import Posting
 from hiringcafe_toolkit.job_shortlist.screen import BAND_POSSIBLE, BAND_STRONG, Verdict
 
@@ -111,10 +111,21 @@ class SeenEntry:
     surfaced_count: int = 1
     opened: bool = False
     applied: bool = False
-    """A resume was submitted, per the ``r`` flag in the visit log. The clean
-    label: it takes a deliberate keypress, where `opened` fires on tab open."""
+    """A resume went in for *this posting*, per the ``r`` flag on its key."""
+    company_applied: bool = False
+    """A resume went to this *employer*, per the ``r`` flag on their host.
+
+    Kept separate from ``applied`` rather than folded into it. Browsing a
+    company's own listings and applying to something found there sets this and
+    not ``applied``, because the role applied to need not be the one that
+    surfaced. Merging them would make it impossible to tell whether the screen
+    picked the right posting or merely the right company - which is the
+    distinction the labels exist to measure."""
     title: str = ""
     company: str = ""
+    company_host: str = ""
+    """Carried so an employer-level application can be attributed back to the
+    posting that surfaced them."""
     """Carried purely so the store can be read and hand-edited without
     cross-referencing another file."""
 
@@ -128,8 +139,10 @@ class SeenEntry:
             "surfaced_count": self.surfaced_count,
             "opened": self.opened,
             "applied": self.applied,
+            "company_applied": self.company_applied,
             "title": self.title,
             "company": self.company,
+            "company_host": self.company_host,
         }
 
     @classmethod
@@ -143,8 +156,10 @@ class SeenEntry:
             surfaced_count=int(record.get("surfaced_count", 1)),
             opened=bool(record.get("opened", False)),
             applied=bool(record.get("applied", False)),
+            company_applied=bool(record.get("company_applied", False)),
             title=str(record.get("title", "")),
             company=str(record.get("company", "")),
+            company_host=str(record.get("company_host", "")),
         )
 
 
@@ -190,6 +205,7 @@ class SeenStore:
                     last_surfaced=today,
                     title=posting.raw_title or posting.title,
                     company=posting.company,
+                    company_host=posting.company_host or "",
                 )
             )
             return
@@ -230,26 +246,34 @@ class SeenStore:
         self._entries.pop(existing.object_id, None)
         self._put(merged)
 
-    def apply_visit_log(self, opened: Mapping[str, bool]) -> tuple[int, int]:
-        """Attach `opened` and `applied` labels from a VisitLogger export.
+    def apply_visit_log(
+        self, opened: Mapping[str, bool], applied_hosts: frozenset[str] = frozenset()
+    ) -> tuple[int, int, int]:
+        """Attach `opened`, `applied` and `company_applied` from a VisitLogger export.
 
-        Checks every key a posting is known under, because the surviving
-        listing - and therefore the key the render wrote - can change between
-        runs. Returns the counts now marked.
+        Posting keys are checked against every id an entry is known under,
+        because the surviving listing - and so the key the render wrote - can
+        change between runs. Employer keys are matched by host, subdomains
+        included, since the log records whichever host was actually opened.
+
+        Returns the counts now marked.
         """
         for object_id, entry in list(self._entries.items()):
             candidates = [entry.object_id, *(k[3:] for k in entry.keys if k.startswith("id:"))]
             marks = [opened[posting_key(c)] for c in candidates if posting_key(c) in opened]
-            if not marks:
+            company = applied_to(entry.company_host, applied_hosts)
+            if not marks and not company:
                 continue
             self._entries[object_id] = replace(
                 entry,
-                opened=entry.opened or True,
+                opened=entry.opened or bool(marks),
                 applied=entry.applied or any(marks),
+                company_applied=entry.company_applied or company,
             )
         return (
             sum(1 for e in self._entries.values() if e.opened),
             sum(1 for e in self._entries.values() if e.applied),
+            sum(1 for e in self._entries.values() if e.company_applied),
         )
 
 
@@ -300,6 +324,29 @@ def load_opened_postings(path: Path) -> dict[str, bool]:
     return opened
 
 
+def load_applied_hosts(path: Path) -> frozenset[str]:
+    """Employer hosts flagged with ``r`` in a VisitLogger export.
+
+    Read here rather than through company discovery's loader, which normalizes
+    every key and would discard the `job:` entries as unusable. Keys are taken
+    as hosts and matched by domain later, since the log records whichever host
+    was opened - often a careers subdomain.
+    """
+    if not path.exists():
+        return frozenset()
+    parsed: Any = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(parsed, dict):
+        return frozenset()
+    return frozenset(
+        key
+        for key, value in parsed.items()
+        if isinstance(key, str)
+        and not key.startswith(POSTING_KEY_PREFIX)
+        and isinstance(value, Mapping)
+        and value.get("r") is True
+    )
+
+
 @dataclass(frozen=True)
 class DiffResult:
     shortlist_path: Path
@@ -312,6 +359,7 @@ class DiffResult:
     store_size: int = 0
     opened: int = 0
     applied: int = 0
+    company_applied: int = 0
     bands: dict[str, int] = field(default_factory=dict)
 
 
@@ -332,9 +380,11 @@ def run_diff(
     store = load_seen_store(store_path)
     store_size_before = len(store)
 
-    opened_count = applied_count = 0
+    opened_count = applied_count = company_applied_count = 0
     if visit_log_path is not None:
-        opened_count, applied_count = store.apply_visit_log(load_opened_postings(visit_log_path))
+        opened_count, applied_count, company_applied_count = store.apply_visit_log(
+            load_opened_postings(visit_log_path), load_applied_hosts(visit_log_path)
+        )
 
     surfaced: list[Verdict] = []
     suppressed_postings: list[Posting] = []
@@ -395,6 +445,7 @@ def run_diff(
         "store_entries_after": len(store),
         "opened": opened_count,
         "applied": applied_count,
+        "company_applied": company_applied_count,
     }
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -417,5 +468,6 @@ def run_diff(
         store_size=len(store),
         opened=opened_count,
         applied=applied_count,
+        company_applied=company_applied_count,
         bands=dict(bands),
     )

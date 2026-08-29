@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from hiringcafe_toolkit.common.careers_link import company_entry_url, derive_careers_link
-from hiringcafe_toolkit.common.urls import posting_key
+from hiringcafe_toolkit.common.urls import applied_to, posting_key
 from hiringcafe_toolkit.job_shortlist.screen import BAND_POSSIBLE, BAND_STRONG
 
 JsonDict = dict[str, Any]
@@ -199,9 +199,12 @@ def _company_cell(posting: Mapping[str, Any], applied_hosts: frozenset[str]) -> 
     the only candidate left would be an ATS board, which the extension refuses
     to record against, so it would open a tab and remember nothing.
 
-    Carries a marker when a resume has already gone to this employer. Shown
-    rather than filtered: two genuinely distinct roles at one company are worth
-    both applications, and that is a judgement per row.
+    Carries a marker when a resume has already gone to this employer, matched
+    by domain rather than exact host - the visit log records whichever host was
+    opened, often a careers subdomain like ``careers.appian.com``, while the
+    posting carries the registrable domain. Shown rather than filtered: two
+    genuinely distinct roles at one company are worth both applications, and
+    that is a judgement per row.
     """
     name = _escape(posting.get("company")) or "(unnamed)"
     host = _text(posting.get("company_host"))
@@ -214,7 +217,7 @@ def _company_cell(posting: Mapping[str, Any], applied_hosts: frozenset[str]) -> 
         f'<a href="{_escape(url)}" data-visit-open '
         f'data-visit-key="{_escape(host)}" data-visit-mark="auto">{name}</a>'
     )
-    if host in applied_hosts:
+    if applied_to(host, applied_hosts):
         cell += '<br><span class="applied">resume sent</span>'
     return cell
 

@@ -17,6 +17,7 @@ from hiringcafe_toolkit.common.jsonl import read_jsonl
 from hiringcafe_toolkit.job_shortlist.diff import (
     SeenEntry,
     SeenStore,
+    load_applied_hosts,
     load_opened_postings,
     load_seen_store,
     match_keys,
@@ -403,3 +404,69 @@ def test_a_missing_visit_log_warns_rather_than_failing(tmp_path: Path) -> None:
 
     assert result.surfaced == 1
     assert result.opened == 0
+
+
+# ----- employer-level applications ---------------------------------------
+
+
+def test_a_company_host_is_recorded_on_the_entry(tmp_path: Path) -> None:
+    """Without it an employer-level application cannot be attributed back."""
+    store_path = tmp_path / "seen.jsonl"
+    run_diff([screened()], tmp_path, store_path, compress=False)
+
+    assert load_seen_store(store_path).entries()[0].company_host == "acme.com"
+
+
+def test_an_employer_application_is_recorded_separately(tmp_path: Path) -> None:
+    """Applying from a company's own site sets this and not `applied`.
+
+    The role applied to need not be the one that surfaced, so merging the two
+    would hide whether the screen picked the right posting or only the right
+    company.
+    """
+    store_path = tmp_path / "seen.jsonl"
+    run_diff([screened()], tmp_path, store_path, compress=False)
+    log = visit_log(tmp_path, {"acme.com": {"date": "2026-08-29", "r": True}})
+    result = run_diff([screened()], tmp_path, store_path, visit_log_path=log, compress=False)
+
+    entry = load_seen_store(store_path).entries()[0]
+    assert entry.company_applied and not entry.applied
+    assert (result.company_applied, result.applied) == (1, 0)
+
+
+def test_an_employer_application_matches_a_careers_subdomain(tmp_path: Path) -> None:
+    """The log records whichever host was opened, often careers.<company>."""
+    store_path = tmp_path / "seen.jsonl"
+    run_diff([screened()], tmp_path, store_path, compress=False)
+    log = visit_log(tmp_path, {"careers.acme.com": {"date": "2026-08-29", "r": True}})
+    result = run_diff([screened()], tmp_path, store_path, visit_log_path=log, compress=False)
+
+    assert result.company_applied == 1
+
+
+def test_a_visited_but_unapplied_company_is_not_marked(tmp_path: Path) -> None:
+    store_path = tmp_path / "seen.jsonl"
+    run_diff([screened()], tmp_path, store_path, compress=False)
+    log = visit_log(tmp_path, {"acme.com": {"date": "2026-08-29"}})
+    result = run_diff([screened()], tmp_path, store_path, visit_log_path=log, compress=False)
+
+    assert result.company_applied == 0
+
+
+def test_a_lookalike_domain_does_not_count_as_the_employer(tmp_path: Path) -> None:
+    store_path = tmp_path / "seen.jsonl"
+    run_diff([screened()], tmp_path, store_path, compress=False)
+    log = visit_log(tmp_path, {"notacme.com": {"date": "2026-08-29", "r": True}})
+    result = run_diff([screened()], tmp_path, store_path, visit_log_path=log, compress=False)
+
+    assert result.company_applied == 0
+
+
+def test_posting_keys_are_not_read_as_employer_hosts() -> None:
+    path = Path("/tmp/vl3.json")
+    path.write_text(
+        json.dumps({"job:abc": {"date": "x", "r": True}, "acme.com": {"date": "x", "r": True}}),
+        encoding="utf-8",
+    )
+
+    assert load_applied_hosts(path) == frozenset({"acme.com"})

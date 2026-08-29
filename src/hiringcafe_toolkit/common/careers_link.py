@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
-from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
+from hiringcafe_toolkit.common.urls import host_covers, host_to_url, normalize_host
 
 
 class DerivationTier(StrEnum):
@@ -293,7 +293,4 @@ def _is_own_domain(url: str, host: str) -> bool:
     keeps white-labelled boards like ``jobs.dish.com`` and rejects
     ``boards.greenhouse.io/spacex``.
     """
-    target = normalize_host(urlsplit(url).netloc)
-    if not target:
-        return False
-    return target == host or target.endswith(f".{host}")
+    return host_covers(host, urlsplit(url).netloc)

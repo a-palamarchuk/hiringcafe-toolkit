@@ -591,7 +591,9 @@ def job_shortlist_diff(
         typer.echo(f"  {band:18s} {result.bands.get(band, 0):6d}")
     typer.echo(f"  store entries      {result.store_size:6d}")
     if log_path:
-        typer.echo(f"  opened / applied   {result.opened:6d} / {result.applied}")
+        typer.echo(f"  opened             {result.opened:6d}")
+        typer.echo(f"  applied to posting {result.applied:6d}")
+        typer.echo(f"  applied at company {result.company_applied:6d}")
     else:
         typer.secho(
             "\n  No visit log configured or given, so no opened/applied labels were "
