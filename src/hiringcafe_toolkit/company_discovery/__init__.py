@@ -7,11 +7,6 @@ Discovers companies with nearby engineering openings and produces a list of
 career pages to visit, rather than matching individual job postings.
 """
 
-from hiringcafe_toolkit.company_discovery.careers_link import (
-    CareersLink,
-    DerivationTier,
-    derive_careers_link,
-)
 from hiringcafe_toolkit.company_discovery.render import (
     RenderResult,
     render_html,
@@ -34,15 +29,12 @@ from hiringcafe_toolkit.company_discovery.visited_filter import (
 )
 
 __all__ = [
-    "CareersLink",
-    "DerivationTier",
     "FilterResult",
     "RenderResult",
     "RollupOptions",
     "RollupResult",
     "VisitLog",
     "VisitLogError",
-    "derive_careers_link",
     "filter_companies",
     "load_visit_log",
     "render_html",

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+from hiringcafe_toolkit.common.careers_link import (
+    TIER_RANK,
+    DerivationTier,
+    company_entry_url,
+    derive_careers_link,
+)
 from hiringcafe_toolkit.common.location import (
     build_places,
     haversine_miles,
@@ -12,11 +18,6 @@ from hiringcafe_toolkit.common.location import (
     select_nearby_places,
 )
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
-from hiringcafe_toolkit.company_discovery.careers_link import (
-    TIER_RANK,
-    DerivationTier,
-    derive_careers_link,
-)
 
 # Arbitrary public reference point (Dulles Airport). These tests need stable
 # geography - a Virginia city in range, a Maryland one excluded, a Colorado one
@@ -331,3 +332,38 @@ def test_path_source_without_enough_segments_falls_back_to_host() -> None:
     link = derive_careers_link("https://jobs.lever.co/", "lever")
     assert link.url == "https://jobs.lever.co/"
     assert link.tier is DerivationTier.HOST
+
+
+# ----- company entry URL --------------------------------------------------
+
+
+def test_entry_url_prefers_a_careers_page_on_the_company_domain() -> None:
+    assert (
+        company_entry_url("https://tunnellgov.com/careers/", "tunnellgov.com")
+        == "https://tunnellgov.com/careers/"
+    )
+
+
+def test_entry_url_keeps_a_white_labelled_board_on_a_subdomain() -> None:
+    assert company_entry_url("https://jobs.dish.com/", "dish.com") == "https://jobs.dish.com/"
+
+
+def test_entry_url_replaces_a_vendor_board_with_the_homepage() -> None:
+    """One board shows only what was posted through that instance."""
+    assert (
+        company_entry_url("https://boards.greenhouse.io/spacex/", "spacex.com")
+        == "https://spacex.com"
+    )
+
+
+def test_entry_url_falls_back_to_the_homepage_without_a_careers_url() -> None:
+    assert company_entry_url(None, "acme.com") == "https://acme.com"
+
+
+def test_entry_url_is_none_without_a_known_company_host() -> None:
+    """Keying an ATS host would open a tab and record nothing."""
+    assert company_entry_url("https://boards.greenhouse.io/x/", None) is None
+
+
+def test_entry_url_is_not_fooled_by_a_lookalike_domain() -> None:
+    assert company_entry_url("https://notacme.com/careers", "acme.com") == "https://acme.com"

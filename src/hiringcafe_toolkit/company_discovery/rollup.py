@@ -29,6 +29,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hiringcafe_toolkit.common.careers_link import (
+    TIER_RANK,
+    DerivationTier,
+    derive_careers_link,
+)
 from hiringcafe_toolkit.common.jsonl import JsonlWriter
 from hiringcafe_toolkit.common.location import (
     Place,
@@ -37,11 +42,6 @@ from hiringcafe_toolkit.common.location import (
     select_nearby_places,
 )
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
-from hiringcafe_toolkit.company_discovery.careers_link import (
-    TIER_RANK,
-    DerivationTier,
-    derive_careers_link,
-)
 
 JsonDict = dict[str, Any]
 

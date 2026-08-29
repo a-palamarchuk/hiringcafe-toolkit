@@ -440,19 +440,39 @@ uv run hiringcafe-toolkit job-shortlist render --band strong
 Writes `shortlist-<timestamp>.html` beside the shortlist it was built from, ready for the
 VisitLogger tab queue.
 
-**One queued link per row.** The queue is opt-in: when a page contains any
-`a[data-visit-open]` anchor, only those are queued, so the company and search links stay
-inert. The queued link is the apply URL, keyed to the posting:
+**Two queued links per row, employer first.** The queue is opt-in: only
+`a[data-visit-open]` anchors are queued when any are present.
 
 ```html
-<a href="https://boards.greenhouse.io/acme/jobs/123"
-   data-visit-open data-visit-key="job:grnhse___acme___123" data-visit-mark="auto">
+<a href="https://acme.com" data-visit-open
+   data-visit-key="acme.com" data-visit-mark="auto">Acme</a>
+<a href="https://boards.greenhouse.io/acme/jobs/123" data-visit-open
+   data-visit-key="job:grnhse___acme___123" data-visit-mark="auto">apply</a>
 ```
 
-The `job:` prefix keeps the two pipelines apart in a shared export. The key is the posting
-rather than the host because apply URLs sit on ATS domains shared by thousands of
-employers - and because keying by posting makes the queue resumable, since rows already
-opened are skipped on the next pass.
+The employer's page opens first, because an interesting posting is a reason to look at the
+company before the role. The second time that company appears the extension skips it on
+its own - it refuses any key that already has a date - so a company with four postings
+opens once. At five tabs per press that is roughly two or three rows per batch.
+
+That first link goes to a careers page only when the careers page sits on the employer's
+own domain; otherwise it goes to their homepage. A derived careers URL usually points at
+an ATS board, and a board lists only what was posted through that one instance - Cognizant
+runs three, Merck two, Accenture two - so no single board is the employer's full listing.
+On measured data that means about 11% land on a careers page and 85% on a homepage, one
+click from the jobs. The remaining 4% have no known homepage and get no employer link at
+all, since the only candidate left would be an ATS board and the extension will not record
+against one.
+
+The keys differ deliberately. The posting is keyed `job:<id>`, because apply URLs sit on
+ATS domains shared by thousands of employers and the prefix keeps the two pipelines apart
+in a shared export. The employer's page is keyed by company host - the same key company
+discovery uses - so **processing a company here counts as processing it there**. Both
+pipelines render the same URL under that key; if they disagreed, whichever ran first would
+silently decide what "processed" meant and the other page would never open.
+
+The coupling is one-directional: a visited company never suppresses its postings, since
+those are keyed separately.
 
 Marking produces the `opened` and `applied` labels the diff stage reads back. Nothing in
 the pipeline depends on them, but they can only be collected going forward, so the link is

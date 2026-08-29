@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
+from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
+
 
 class DerivationTier(StrEnum):
     """How a careers link was derived, recorded for run diagnostics."""
@@ -250,3 +252,48 @@ def derive_careers_link(apply_url: str | None, source: str | None) -> CareersLin
     # Default, and the explicit choice for sources mapped to zero segments:
     # the host identifies the employer.
     return CareersLink(_host_root(parts), DerivationTier.HOST)
+
+
+def company_entry_url(careers_url: str | None, company_host: str | None) -> str | None:
+    """The page to open when processing an employer, or None if there is none.
+
+    Prefers a careers page on the employer's *own* domain, and falls back to
+    their homepage otherwise. A derived careers link usually points at an ATS
+    board, and a board shows only what was posted through that one instance:
+    Cognizant runs three (``careers.cognizant.com``, ``cognizant.taleo.net``,
+    ``tas-cognizant.taleo.net``), Merck two, Accenture two. Treating any one of
+    them as the employer's full listing is wrong in exactly the cases - large
+    employers - where the full listing matters most.
+
+    Landing on a homepage costs a click to reach the jobs, which on measured
+    data is about 85% of postings. That is the price of not mistaking a partial
+    list for a complete one.
+
+    Both pipelines call this, and they must agree. They key the visited flag to
+    the company host and share one VisitLogger export, so if they opened
+    different URLs for the same key, whichever ran first would silently decide
+    what "processed" meant and the other page would never open.
+    """
+    host = normalize_host(company_host or "")
+    if not host:
+        # Without a homepage there is nothing to fall back to, and keying an
+        # ATS host would be refused by the extension anyway - it would open a
+        # tab and record nothing.
+        return None
+    if careers_url and _is_own_domain(careers_url, host):
+        return careers_url
+    return host_to_url(host)
+
+
+def _is_own_domain(url: str, host: str) -> bool:
+    """Whether a URL sits on the company's own domain rather than a vendor's.
+
+    Used instead of a list of ATS hostnames: a list needs maintaining as
+    vendors come and go and would miss the long tail, while this correctly
+    keeps white-labelled boards like ``jobs.dish.com`` and rejects
+    ``boards.greenhouse.io/spacex``.
+    """
+    target = normalize_host(urlsplit(url).netloc)
+    if not target:
+        return False
+    return target == host or target.endswith(f".{host}")

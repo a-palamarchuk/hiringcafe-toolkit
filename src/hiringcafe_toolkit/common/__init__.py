@@ -1,5 +1,10 @@
 """Shared helpers: configuration, serialization, scraping, and location logic."""
 
+from hiringcafe_toolkit.common.careers_link import (
+    CareersLink,
+    DerivationTier,
+    derive_careers_link,
+)
 from hiringcafe_toolkit.common.config import (
     CompanyDiscoveryConfig,
     ConfigError,
@@ -29,6 +34,9 @@ from hiringcafe_toolkit.common.scrape import ScrapeResult, run_scrape
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
 
 __all__ = [
+    "CareersLink",
+    "DerivationTier",
+    "derive_careers_link",
     "CompanyDiscoveryConfig",
     "ConfigError",
     "HomeLocation",

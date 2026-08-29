@@ -72,22 +72,32 @@ def test_rows_are_numbered_after_sorting() -> None:
 # ----- VisitLogger contract ---------------------------------------------
 
 
-def test_careers_link_is_the_only_queued_link() -> None:
+def test_the_company_page_is_the_only_queued_link() -> None:
+    """An ATS board lists only what was posted through that one instance."""
     page = render_html([company()], "T")
     queued = re.findall(r'<a href="([^"]+)"[^>]*data-visit-open', page)
-    assert queued == ["https://job-boards.greenhouse.io/acme/"]
+    assert queued == ["https://acme.com"]
 
 
-def test_careers_link_is_keyed_to_the_company_domain() -> None:
-    """The careers page lives on a shared vendor host; the key is what dedupes."""
+def test_a_careers_page_on_the_company_domain_is_queued_instead() -> None:
+    page = render_html(
+        [company(website_host="dish.com", careers_url="https://jobs.dish.com/")], "T"
+    )
+    queued = re.findall(r'<a href="([^"]+)"[^>]*data-visit-open', page)
+    assert queued == ["https://jobs.dish.com/"]
+
+
+def test_the_queued_link_is_keyed_to_the_company_domain() -> None:
+    """Also the key the job-shortlist pipeline uses, so processing counts in both."""
     page = render_html([company()], "T")
     assert 'data-visit-key="acme.com"' in page
     assert 'data-visit-mark="auto"' in page
 
 
-def test_company_and_search_links_are_not_queued() -> None:
+def test_careers_and_search_links_are_not_queued() -> None:
+    """The board stays one click away without being opened automatically."""
     page = render_html([company()], "T")
-    assert '<a href="https://acme.com">Acme</a>' in page
+    assert '<a href="https://job-boards.greenhouse.io/acme/">careers</a>' in page
     assert "duckduckgo.com" in page
     assert page.count("data-visit-open") == 1
 
@@ -97,17 +107,17 @@ def test_search_link_uses_the_company_name() -> None:
     assert "q=Applied+Intuition+careers" in page
 
 
-def test_website_less_row_is_queued_without_key_or_marking() -> None:
-    """Nothing to mark, so the row opens on every run and is reviewed by eye."""
+def test_website_less_row_has_no_queued_link() -> None:
+    """The only candidate left is an ATS board, which the extension will not record."""
     page = render_html([company(website_host=None, website_url=None, has_website=False)], "T")
-    assert "data-visit-open" in page
-    assert "data-visit-key" not in page
-    assert "data-visit-mark" not in page
-
-
-def test_row_without_a_careers_url_has_no_queued_link() -> None:
-    page = render_html([company(careers_url=None)], "T")
     assert "data-visit-open" not in page
+
+
+def test_a_row_without_a_careers_url_still_queues_the_homepage() -> None:
+    """The employer is worth looking at even when no board URL could be derived."""
+    page = render_html([company(careers_url=None)], "T")
+    queued = re.findall(r'<a href="([^"]+)"[^>]*data-visit-open', page)
+    assert queued == ["https://acme.com"]
 
 
 # ----- cell formatting ---------------------------------------------------

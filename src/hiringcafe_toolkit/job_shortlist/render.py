@@ -5,17 +5,29 @@ opens links a few tabs at a time and remembers what it opened. Its queue is
 opt-in: when a page contains any ``a[data-visit-open]`` anchor, only those are
 queued, so the company and search links on the same row stay inert.
 
-Each row carries exactly one queued link - the apply URL - keyed to the
-posting::
+Each row carries two queued links, in this order::
 
-    <a href="https://boards.greenhouse.io/acme/jobs/123"
-       data-visit-open data-visit-key="job:grnhse___acme___123" data-visit-mark="auto">
+    <a href="https://acme.com" data-visit-open
+       data-visit-key="acme.com" data-visit-mark="auto">Acme</a>
+    <a href="https://boards.greenhouse.io/acme/jobs/123" data-visit-open
+       data-visit-key="job:grnhse___acme___123" data-visit-mark="auto">apply</a>
 
-The prefix is what keeps the two pipelines apart in a shared export, and the
-key is the posting rather than the host because apply URLs live on ATS domains
-shared by thousands of employers. Keying by posting also makes the queue
-resumable: rows already opened are skipped on the next pass, so the backlog
-drains at whatever pace it is actually worked.
+The employer's page first, because an interesting posting is a reason to look
+at the company before the role, and the second time that company appears the
+extension skips the link on its own - it refuses any key that already carries a
+date, so a company with four postings opens once.
+
+The keys differ on purpose. The posting is keyed ``job:<id>`` because apply
+URLs sit on ATS domains shared by thousands of employers, and the prefix keeps
+the two pipelines apart in a shared export. The employer's page is keyed by
+company host, which is the same key company discovery uses - so processing a
+company here counts as processing it there. That coupling is deliberate and
+one-directional: a visited company never suppresses its postings, since those
+are keyed separately.
+
+Keying by posting also makes the queue resumable: rows already opened are
+skipped on the next pass, so the backlog drains at whatever pace it is actually
+worked.
 
 Marking is what produces the ``opened`` and ``applied`` labels the diff stage
 reads back. Those are the only record of which postings were acted on, and
@@ -35,14 +47,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
 
-from hiringcafe_toolkit.common.urls import host_to_url, posting_key
+from hiringcafe_toolkit.common.careers_link import company_entry_url, derive_careers_link
+from hiringcafe_toolkit.common.urls import posting_key
 from hiringcafe_toolkit.job_shortlist.screen import BAND_POSSIBLE, BAND_STRONG
 
 JsonDict = dict[str, Any]
 
-SEARCH_URL = "https://duckduckgo.com/?q="
 MAX_TOOLS_SHOWN = 5
 MAX_CITIES_SHOWN = 2
 
@@ -181,7 +192,12 @@ def _apply_cell(posting: Mapping[str, Any]) -> str:
 
 
 def _company_cell(posting: Mapping[str, Any], applied_hosts: frozenset[str]) -> str:
-    """Company name, linked to its site. Never queued.
+    """Company name, linked to the page worth opening to process the employer.
+
+    Queued and keyed by company host, so opening it records the company as
+    processed for both pipelines. Without a known host there is no link at all:
+    the only candidate left would be an ATS board, which the extension refuses
+    to record against, so it would open a tab and remember nothing.
 
     Carries a marker when a resume has already gone to this employer. Shown
     rather than filtered: two genuinely distinct roles at one company are worth
@@ -189,8 +205,16 @@ def _company_cell(posting: Mapping[str, Any], applied_hosts: frozenset[str]) -> 
     """
     name = _escape(posting.get("company")) or "(unnamed)"
     host = _text(posting.get("company_host"))
-    cell = f'<a href="{_escape(host_to_url(host))}">{name}</a>' if host else name
-    if host and host in applied_hosts:
+    careers = derive_careers_link(_text(posting.get("apply_url")), _text(posting.get("source"))).url
+    url = company_entry_url(careers, host)
+    if not url:
+        return name
+
+    cell = (
+        f'<a href="{_escape(url)}" data-visit-open '
+        f'data-visit-key="{_escape(host)}" data-visit-mark="auto">{name}</a>'
+    )
+    if host in applied_hosts:
         cell += '<br><span class="applied">resume sent</span>'
     return cell
 
@@ -203,13 +227,6 @@ def _title_cell(posting: Mapping[str, Any]) -> str:
     distinction being scanned for.
     """
     return _escape(posting.get("raw_title")) or _escape(posting.get("title")) or "(untitled)"
-
-
-def _search_cell(posting: Mapping[str, Any]) -> str:
-    query = " ".join(
-        part for part in (_text(posting.get("company")), _text(posting.get("raw_title"))) if part
-    )
-    return f'<a href="{SEARCH_URL}{quote_plus(query)}">find</a>' if query else "-"
 
 
 def _row(index: int, posting: Mapping[str, Any], applied_hosts: frozenset[str]) -> str:
@@ -225,7 +242,6 @@ def _row(index: int, posting: Mapping[str, Any], applied_hosts: frozenset[str]) 
         f'<td class="tools">{_format_tools(posting)}</td>',
         f'<td class="num">{_escape(published) or "-"}</td>',
         f'<td class="num">{_apply_cell(posting)}</td>',
-        f'<td class="num">{_search_cell(posting)}</td>',
     )
     band = _escape(posting.get("band"))
     return f'<tr class="{band}">' + "".join(cells) + "</tr>"
@@ -262,7 +278,6 @@ HEADERS = (
     "Tools",
     "Posted",
     "Apply",
-    "Find",
 )
 
 
