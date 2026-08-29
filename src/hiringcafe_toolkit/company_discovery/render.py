@@ -5,8 +5,8 @@ opens links continuously while keeping a few tabs at a time. Its queue is
 opt-in: when a page contains any ``a[data-visit-open]`` anchor, only those are
 queued, so helper links on the same row are inert.
 
-Each row therefore carries exactly one queued link - the careers page - marked
-with the company's own website host::
+Each row therefore carries exactly one queued link - the employer's own page -
+marked with their website host::
 
     <a href="https://job-boards.greenhouse.io/acme/"
        data-visit-open data-visit-key="acme.com" data-visit-mark="auto">
@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
+
+from hiringcafe_toolkit.common.careers_link import company_entry_url
 
 JsonDict = dict[str, Any]
 
@@ -115,24 +117,28 @@ def _format_postings(company: Mapping[str, Any]) -> str:
 
 
 def _careers_cell(company: Mapping[str, Any]) -> str:
-    """The one queued link in the row."""
+    """The derived board, kept as a manual click. No longer queued.
+
+    Still worth having: when the queued link lands on a homepage, this is the
+    shortcut to whatever that employer did post through their ATS.
+    """
     careers_url = _text(company.get("careers_url"))
     if not careers_url:
         return "-"
-    host = _text(company.get("website_host"))
-    attributes = ' data-visit-open data-visit-mark="auto"' if host else " data-visit-open"
-    if host:
-        attributes += f' data-visit-key="{_escape(host)}"'
-    return f'<a href="{_escape(careers_url)}"{attributes}>careers</a>'
+    return f'<a href="{_escape(careers_url)}">careers</a>'
 
 
 def _company_cell(company: Mapping[str, Any]) -> str:
-    """Company name, linked to its website. Never queued."""
+    """The one queued link in the row: the employer's own page."""
     name = _escape(company.get("name")) or _escape(company.get("website_host")) or "(unnamed)"
-    website = _text(company.get("website_url"))
-    if not website:
+    host = _text(company.get("website_host"))
+    url = company_entry_url(_text(company.get("careers_url")), host)
+    if not url:
         return name
-    return f'<a href="{_escape(website)}">{name}</a>'
+    return (
+        f'<a href="{_escape(url)}" data-visit-open '
+        f'data-visit-key="{_escape(host)}" data-visit-mark="auto">{name}</a>'
+    )
 
 
 def _row(index: int, company: Mapping[str, Any]) -> str:

@@ -38,6 +38,7 @@ def row(**overrides: Any) -> dict[str, Any]:
         "city_count": 1,
         "tools": ["Java", "Spring Boot", "Kubernetes"],
         "published_at": "2026-08-20T00:00:00Z",
+        "source": "grnhse",
         "apply_url": "https://boards.greenhouse.io/acme/jobs/123",
         "alternate_apply_urls": [],
         "demote_reasons": [],
@@ -56,35 +57,63 @@ def queued(markup: str) -> list[str]:
 # ----- queue markup -------------------------------------------------------
 
 
-def test_exactly_one_link_per_row_is_queued() -> None:
-    """The queue is opt-in per page, so an extra marked link would double the work."""
-    markup = render_html([row()], "t")
+def test_each_row_queues_the_company_page_then_the_apply_link() -> None:
+    """The queue walks the DOM in order, so column order sets the open order."""
+    links = queued(render_html([row()], "t"))
 
-    assert len(queued(markup)) == 1
-    assert len(anchors(markup)) == 3  # apply, company, find
+    assert len(links) == 2
+    assert "acme.com" in links[0]
+    assert "https://boards.greenhouse.io/acme/jobs/123" in links[1]
 
 
-def test_the_queued_link_is_the_apply_url() -> None:
-    markup = queued(render_html([row()], "t"))[0]
+def test_the_company_link_is_keyed_by_host_not_by_posting() -> None:
+    """Same key company discovery uses, so processing counts for both pipelines."""
+    company = queued(render_html([row()], "t"))[0]
 
-    assert "https://boards.greenhouse.io/acme/jobs/123" in markup
+    assert 'data-visit-key="acme.com"' in company
+    assert 'data-visit-mark="auto"' in company
+
+
+def test_an_ats_careers_page_is_replaced_by_the_company_homepage() -> None:
+    """One ATS board is only what was posted through that instance."""
+    company = queued(render_html([row()], "t"))[0]
+
+    assert 'href="https://acme.com"' in company
+    assert "greenhouse" not in company
+
+
+def test_a_careers_page_on_the_company_domain_is_used_as_is() -> None:
+    markup = render_html(
+        [row(company_host="dish.com", source="unknown-ats", apply_url="https://jobs.dish.com/x/1")],
+        "t",
+    )
+
+    assert "jobs.dish.com" in queued(markup)[0]
+
+
+def test_a_company_without_a_known_host_gets_no_company_link() -> None:
+    """The only candidate left is an ATS board, which the extension will not record."""
+    links = queued(render_html([row(company_host="")], "t"))
+
+    assert len(links) == 1
+    assert "greenhouse" in links[0]
 
 
 def test_the_queue_key_is_the_prefixed_posting_id() -> None:
     """The prefix keeps the two pipelines apart in a shared export."""
-    markup = queued(render_html([row()], "t"))[0]
+    markup = queued(render_html([row()], "t"))[1]
 
     assert 'data-visit-key="job:grnhse___acme___123"' in markup
 
 
-def test_the_queued_link_is_auto_marked() -> None:
+def test_the_apply_link_is_auto_marked() -> None:
     """Marking is the only source of the opened and applied labels."""
-    assert 'data-visit-mark="auto"' in queued(render_html([row()], "t"))[0]
+    assert 'data-visit-mark="auto"' in queued(render_html([row()], "t"))[1]
 
 
 def test_a_posting_without_an_id_is_queued_but_not_marked() -> None:
     """Better to reopen it than to record a visit against an empty key."""
-    markup = queued(render_html([row(object_id="")], "t"))[0]
+    markup = queued(render_html([row(object_id="")], "t"))[1]
 
     assert "data-visit-open" in markup
     assert "data-visit-key" not in markup
@@ -94,21 +123,21 @@ def test_a_posting_without_an_id_is_queued_but_not_marked() -> None:
 def test_an_alternate_apply_url_is_used_when_the_primary_is_missing() -> None:
     markup = render_html([row(apply_url="", alternate_apply_urls=["https://alt.test/job"])], "t")
 
-    assert "https://alt.test/job" in queued(markup)[0]
+    assert "https://alt.test/job" in queued(markup)[1]
 
 
 def test_a_posting_with_no_apply_url_gets_no_queued_link() -> None:
     """A dead link in the queue would open a broken tab and mark it visited."""
     markup = render_html([row(apply_url="", alternate_apply_urls=[])], "t")
 
-    assert queued(markup) == []
+    assert len(queued(markup)) == 1  # the company page, no apply link
 
 
-def test_the_company_link_is_never_queued() -> None:
+def test_the_find_column_is_gone() -> None:
     markup = render_html([row()], "t")
-    company = [a for a in anchors(markup) if "acme.com" in a and "greenhouse" not in a]
 
-    assert company and all("data-visit-open" not in a for a in company)
+    assert "duckduckgo" not in markup
+    assert ">find<" not in markup
 
 
 # ----- ordering -----------------------------------------------------------
@@ -204,7 +233,7 @@ def test_markup_is_escaped() -> None:
 
 def test_attribute_values_are_escaped() -> None:
     """A quote in an id would otherwise break out of the data-visit-key attribute."""
-    markup = render_html([row(object_id='a" onload="x')], "t")
+    markup = queued(render_html([row(object_id='a" onload="x')], "t"))[1]
 
     assert 'onload="x"' not in markup
     assert "&quot;" in markup
