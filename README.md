@@ -496,13 +496,34 @@ filtered, because two genuinely distinct roles at one employer can both be worth
 to. That reads the visit log configured under `[visit_logger]`, shared with the
 company-discovery pipeline; `--visit-log` overrides it.
 
-#### Running it daily
+#### Generating a shortlist: the full checklist
+
+The loop is circular. Working through one page produces the visit-log marks that the next
+run reads, so the checklist starts by finishing the previous cycle rather than by scraping.
+On a first run, skip to step 3.
+
+**1. Work through the previous page.** Start the tab queue from the extension's menu action.
+It opens five tabs at a time, refilling as you close them, and skips anything already
+marked. Each row opens the employer's page first, then the posting.
+
+**2. Press F9 on any posting you applied to, before closing its tab.** That sets the `R`
+badge and is the only source of the `applied` label. It works because the tab was opened
+from the queue: F9 acts on the link's key rather than the tab's own host, so the mark lands
+on the posting even though the tab shows an ATS. A posting opened by hand - middle-clicked,
+or from anywhere but the queue - has no such key, and F9 will be refused for the vendor
+host. Queue-open or no label.
+
+**3. Export the visit log** from the extension to the path in `[visit_logger].export_path`.
+This has to happen *before* the run, not after: `diff` reads it for the `opened` and
+`applied` labels, and `render` reads it to mark employers you have already applied to.
+
+**4. Run the pipeline.**
 
 ```bash
 make shortlist
 ```
 
-which is the four stages in order:
+which is the five stages in order:
 
 ```bash
 uv run hiringcafe-toolkit job-shortlist scrape
@@ -514,18 +535,24 @@ uv run hiringcafe-toolkit job-shortlist render
 
 Chain them with `make` or `&&`, never `;`. Every stage defaults to the newest file from the
 one before, so a failed scrape would otherwise have the rest quietly reprocess yesterday's
-data and report a shortlist of zero - which looks like a quiet day rather than a broken run.
+data and report a shortlist of zero - which reads as a quiet day rather than a broken run.
 
-**Export the visit log before running, not after.** The export is a manual step in the
-extension. `diff` reads it to attach `opened` and `applied` labels, and `render` reads it
-to mark employers already applied to; both take the path from `[visit_logger].export_path`
-rather than a flag, so neither can be silently skipped. A stale or missing export only
-means the labels lag - nothing in the pipeline depends on them, and a missing file warns
-rather than failing.
+**5. Check three numbers in the output before trusting the page.**
 
-**Daily is a target, not a requirement.** The 21-day fetch window is three weeks of
-missed-run slack, so skipping a week costs nothing. Rendered pages are never overwritten
-either, so the backlog waits in the file it was first written to.
+- `scrape` - a `stop_reason` of `reached max_pages` means the run was cut short, not that
+  the result set ended.
+- `diff` - `suppressed` should be most of the screened postings on a normal day. Near zero
+  means the store is not being found; near everything means nothing new arrived.
+- `diff` - `opened / applied` should be non-zero once you have worked a page. Zero after a
+  session means the queue marks are not reaching the store, and the labels for that session
+  are gone.
+
+**6. Open the new page** in `data/job_shortlist/processed/`, and go back to step 1 next time.
+
+Two things that make skipping safe. The 21-day fetch window is three weeks of missed-run
+slack, so a skipped week costs nothing. And rendered pages are never overwritten, so an
+unread backlog waits in the file it was first written to - use `--band strong` to generate
+a shorter page when the `possible` section is too long to face.
 
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every
