@@ -74,6 +74,16 @@ def pct(part: int, whole: float) -> str:
     return f"{part / whole * 100:5.1f}%" if whole else "    - "
 
 
+def sum_totals(searches: list[JsonDict], key: str) -> float | None:
+    """One reported total summed over searches; None when no search reported it."""
+    values = [
+        value
+        for search in searches
+        if isinstance(value := (search.get("reported_totals") or {}).get(key), (int, float))
+    ]
+    return sum(values) if values else None
+
+
 def section(title: str) -> None:
     print(f"\n{title}\n{'-' * len(title)}")
 
@@ -96,9 +106,12 @@ def main() -> None:
         guess = args.jobs.parent / f"meta-{stem.removeprefix('jobs-')}.json"
         meta_path = guess if guess.exists() else None
     meta: JsonDict = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path else {}
-    totals = meta.get("reported_totals") or {}
-    reported_jobs = totals.get("ssrTotalCount")
-    reported_companies = totals.get("ssrCompanyCount")
+    # Metas hold one entry per search; older ones were a single flat search.
+    searches: list[JsonDict] = meta.get("searches") or ([meta] if meta else [])
+    # Summed across searches, so with several it is an upper bound: a job
+    # matching two searches is counted by both but stored once.
+    reported_jobs = sum_totals(searches, "ssrTotalCount")
+    reported_companies = sum_totals(searches, "ssrCompanyCount")
 
     ids = [r.get("objectID") for r in records if r.get("objectID")]
     hosts = {
@@ -175,7 +188,12 @@ def main() -> None:
             bar = "#" * max(1, round(count / peak * BAR_WIDTH))
             print(f"    {day}  {count:5d}  {bar}")
         span = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[0])).days + 1
-        window = (meta.get("searchState") or {}).get("dateFetchedPastNDays")
+        windows = [
+            w
+            for search in searches
+            if isinstance(w := (search.get("searchState") or {}).get("dateFetchedPastNDays"), int)
+        ]
+        window = max(windows) if windows else None
         print(f"\n  publish dates span {span} days", end="")
         if isinstance(window, int) and window > 0:
             print(f"; fetch window was {window} days")

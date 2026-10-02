@@ -6,12 +6,19 @@ the site's own frontend makes:
   1. GET https://hiringcafe.com/?searchState=<json>
      HTML whose ``__NEXT_DATA__`` script tag carries the current Next.js build
      id along with the first page of results (server-side rendered).
-  2. GET https://hiringcafe.com/_next/data/<build_id>/index.json
+  2. GET https://hiringcafe.com/_next/data/<build_id>/<route>.json
          ?searchState=<json>&page=<n>
      JSON for subsequent pages.
 
 The build id changes whenever the site is redeployed, so it is read at run
 time and refreshed transparently if it goes stale mid-run.
+
+The route is read at run time too. The search page moved from ``/`` to
+``/classic`` (around 2026-09-30): the landing request is redirected there, but
+the old ``index.json`` data route answers every page with a redirect payload
+and no records, which reads exactly like the end of the result set. So the
+route is taken from the page the landing request ended up on, and a redirect
+payload is treated as a stale build rather than as an empty page.
 
 The client is deliberately thin: it fetches and parses, but takes no view on
 deduplication, output format, or when a result set is "complete". Those are
@@ -226,9 +233,11 @@ class HiringCafeClient:
             raise HiringCafeError(f"landing page returned HTTP {response.status_code}")
         return extract_next_data(response.text)
 
-    def fetch_data_page(self, build_id: str, search_state_json: str, page: int) -> JsonDict:
+    def fetch_data_page(
+        self, build_id: str, search_state_json: str, page: int, route: str = "index"
+    ) -> JsonDict:
         """Fetch one page from the Next.js data route."""
-        url = f"{self.base_url}/_next/data/{build_id}/index.json"
+        url = f"{self.base_url}/_next/data/{build_id}/{route}.json"
         response = self._get(
             url,
             {"searchState": search_state_json, "page": page},
@@ -247,9 +256,28 @@ class HiringCafeClient:
             raise StaleBuildIdError(f"non-JSON response for page {page}") from exc
         if not isinstance(payload, dict):
             raise ResponseParseError(f"page {page} payload was not a JSON object")
+        page_props = payload.get("pageProps")
+        if isinstance(page_props, dict) and "__N_REDIRECT" in page_props:
+            # Next.js answers a moved page with a redirect payload and no
+            # records. Read as a page it would end the run as if exhausted.
+            raise StaleBuildIdError(
+                f"data route {route} redirected to {page_props['__N_REDIRECT']!r} for page {page}"
+            )
         return payload
 
     # ----- iteration ------------------------------------------------------
+
+    @staticmethod
+    def _data_route(next_data: Mapping[str, Any]) -> str:
+        """The data route matching the page that rendered ``next_data``.
+
+        ``__NEXT_DATA__`` names its page: ``/`` serves ``index.json``,
+        ``/classic`` serves ``classic.json``.
+        """
+        page = next_data.get("page")
+        if not isinstance(page, str) or page.strip("/") == "":
+            return "index"
+        return page.strip("/")
 
     def iter_pages(self, search_state: Mapping[str, Any], max_pages: int) -> Iterator[ResultPage]:
         """Yield result pages, starting with the server-rendered one.
@@ -264,7 +292,8 @@ class HiringCafeClient:
         build_id = next_data.get("buildId")
         if not isinstance(build_id, str) or not build_id:
             raise ResponseParseError("buildId not found in __NEXT_DATA__")
-        logger.info("build id: %s", build_id)
+        route = self._data_route(next_data)
+        logger.info("build id: %s, data route: %s", build_id, route)
 
         props = next_data.get("props", {})
         if not isinstance(props, dict):
@@ -285,7 +314,7 @@ class HiringCafeClient:
         while page <= max_pages:
             time.sleep(self.delay_seconds)
             try:
-                payload = self.fetch_data_page(build_id, search_state_json, page)
+                payload = self.fetch_data_page(build_id, search_state_json, page, route)
             except StaleBuildIdError:
                 refreshes += 1
                 if refreshes > BUILD_ID_REFRESH_LIMIT:
@@ -297,6 +326,7 @@ class HiringCafeClient:
                 refreshed = next_data.get("buildId")
                 if isinstance(refreshed, str) and refreshed:
                     build_id = refreshed
+                route = self._data_route(next_data)
                 continue  # retry the same page with the fresh build id
 
             records = find_records(payload)

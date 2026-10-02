@@ -176,6 +176,8 @@ class Posting:
     certifications: tuple[str, ...] = ()
     requirements: str = ""
     tools: tuple[str, ...] = ()
+    air_travel: str | None = None
+    """Vendor-inferred: "None", "Minimal", "Moderate" or "Extensive"."""
 
     # --- provenance ---
     source: str = ""
@@ -309,6 +311,7 @@ def normalize_record(record: Mapping[str, Any]) -> Posting:
         certifications=_strings(job.get("licenses_or_certifications")),
         requirements=_text(job.get("requirements_summary")),
         tools=_strings(job.get("technical_tools")),
+        air_travel=_optional(job.get("air_travel_requirement")),
         source=_text(record.get("source")),
         apply_url=_optional(record.get("apply_url")),
         published_at=_optional(job.get("estimated_publish_date")),

@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from hiringcafe_toolkit.common.config import ScreenSettings
 from hiringcafe_toolkit.common.jsonl import read_jsonl
 from hiringcafe_toolkit.job_shortlist.normalize import Posting
@@ -139,6 +141,21 @@ def test_many_cities_demotes_for_geo_tiered_pay() -> None:
 
     assert verdict.band == BAND_POSSIBLE
     assert "geo-tiered pay band" in verdict.demote_reasons
+
+
+@pytest.mark.parametrize("level", ["Moderate", "Extensive"])
+def test_frequent_air_travel_demotes_rather_than_rejects(level: str) -> None:
+    """Field and consulting roles; the level is inferred, so never a reject."""
+    verdict = assign_band(posting(air_travel=level), SETTINGS)
+
+    assert verdict.band == BAND_POSSIBLE
+    assert verdict.demote_reasons == ("frequent air travel",)
+    assert verdict.reject_reasons == ()
+
+
+@pytest.mark.parametrize("level", [None, "None", "Minimal"])
+def test_little_or_unknown_air_travel_does_not_demote(level: str | None) -> None:
+    assert band(air_travel=level) == BAND_STRONG
 
 
 # ----- role_type ----------------------------------------------------------

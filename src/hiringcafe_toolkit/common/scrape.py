@@ -1,17 +1,24 @@
-"""Fetch raw job records for a search. Shared by every pipeline.
+"""Fetch raw job records for one or more searches. Shared by every pipeline.
 
 Writes two files per run:
 
 ``jobs-<timestamp>.jsonl[.gz]``
     One raw record per line, deduplicated by ``objectID`` across pages and
-    otherwise untouched. Keeping the records verbatim means later stages can be
-    rewritten and re-run without re-scraping.
+    across searches, and otherwise untouched. Keeping the records verbatim
+    means later stages can be rewritten and re-run without re-scraping.
 
 ``meta-<timestamp>.json``
-    Audit trail: the searchState used, per-page received/new counts, build ids,
-    any totals the API reported, and the reason iteration stopped. This is what
-    tells you whether a run actually exhausted the result set. Left
-    uncompressed - it is small and read by eye after every run.
+    Audit trail, one entry per search: the searchState used, per-page
+    received/new counts, build ids, any totals the API reported, and the
+    reason iteration stopped. This is what tells you whether a run actually
+    exhausted each result set. Left uncompressed - it is small and read by eye
+    after every run.
+
+Several searches share one output file rather than one file each, because the
+later stages pick up "the newest raw file": two files per run would leave one
+of them unprocessed. Searches overlap (a remote job near home matches both a
+local and a nationwide search), and writing each record once keeps the overlap
+from reaching normalization as a duplicate.
 
 This module takes no view on what the records mean. Both pipelines scrape
 identically and diverge only afterwards, so this lives in ``common`` rather
@@ -22,8 +29,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -53,6 +60,34 @@ class PageSource(Protocol):
 
 
 @dataclass(frozen=True)
+class Search:
+    """One searchState to scrape, named for the meta sidecar."""
+
+    name: str
+    state: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Outcome of one search within a run."""
+
+    name: str
+    unique_records: int
+    """Distinct records this search returned, including ones an earlier
+    search in the same run had already written."""
+    already_written: int
+    """Of those, how many an earlier search found first. The overlap between
+    searches, and the reason the file total is less than the sum."""
+    pages_fetched: int
+    stop_reason: str
+    reported_totals: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def truncated(self) -> bool:
+        return self.stop_reason.startswith("reached max_pages")
+
+
+@dataclass(frozen=True)
 class ScrapeResult:
     """Outcome of one scrape run."""
 
@@ -61,109 +96,180 @@ class ScrapeResult:
     unique_records: int
     pages_fetched: int
     stop_reason: str
-    reported_totals: dict[str, float]
+    searches: tuple[SearchResult, ...] = ()
+
+    @property
+    def truncated(self) -> bool:
+        """Whether any search stopped at the page ceiling rather than the end."""
+        return any(search.truncated for search in self.searches)
 
 
 def _timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d-%H%M%S")
 
 
+@dataclass
+class _Progress:
+    """Running state for one search, readable at any point for the meta."""
+
+    search: Search
+    keys: set[str] = field(default_factory=set)
+    """Keys this search has returned. Kept apart from the run-wide written set:
+    the stop rule must count records new to *this* search, because a
+    nationwide search run after a local one opens with pages of jobs the local
+    one already wrote, and counting those as stale would end it after two."""
+    already_written: int = 0
+    keyless: int = 0
+    pages: list[JsonDict] = field(default_factory=list)
+    build_ids: list[str] = field(default_factory=list)
+    reported_totals: dict[str, float] = field(default_factory=dict)
+    stop_reason: str = "unknown"
+
+    def as_meta(self) -> JsonDict:
+        return {
+            "variant": self.search.name,
+            "searchState": dict(self.search.state),
+            "pages": self.pages,
+            "build_ids": self.build_ids,
+            "reported_totals": self.reported_totals,
+            "unique_records": len(self.keys),
+            "already_written": self.already_written,
+            "keyless_records": self.keyless,
+            "stop_reason": self.stop_reason,
+        }
+
+    def result(self) -> SearchResult:
+        return SearchResult(
+            name=self.search.name,
+            unique_records=len(self.keys),
+            already_written=self.already_written,
+            pages_fetched=len(self.pages),
+            stop_reason=self.stop_reason,
+            reported_totals=dict(self.reported_totals),
+        )
+
+
+def _overall_stop_reason(progress: Sequence[_Progress]) -> str:
+    """One search's reason as is; several, each labelled by name."""
+    if not progress:
+        return "unknown"
+    if len(progress) == 1:
+        return progress[0].stop_reason
+    return "; ".join(f"{p.search.name}: {p.stop_reason}" for p in progress)
+
+
+def _scrape_one(
+    progress: _Progress,
+    writer: JsonlWriter,
+    written_keys: set[str],
+    client: PageSource,
+    max_pages: int,
+) -> None:
+    """Page through one search, writing records no earlier search wrote."""
+    name = progress.search.name
+    consecutive_zero_new = 0
+    for page in client.iter_pages(progress.search.state, max_pages):
+        if page.build_id and page.build_id not in progress.build_ids:
+            progress.build_ids.append(page.build_id)
+        progress.reported_totals.update(page.reported_totals)
+
+        new_count = 0
+        for record in page.records:
+            key = record_key(record)
+            if key is None:
+                # No usable id: keep it (raw data is preserved as-is) but
+                # count it, since it cannot be deduplicated.
+                progress.keyless += 1
+                writer.write(record)
+                new_count += 1
+                continue
+            if key in progress.keys:
+                continue
+            progress.keys.add(key)
+            new_count += 1
+            if key in written_keys:
+                progress.already_written += 1
+                continue
+            written_keys.add(key)
+            writer.write(record)
+        writer.flush()
+
+        progress.pages.append({"page": page.label, "received": len(page.records), "new": new_count})
+        logger.info(
+            "%s page %s: %d records, %d new (unique so far: %d)",
+            name,
+            page.label,
+            len(page.records),
+            new_count,
+            len(progress.keys),
+        )
+
+        if not page.records:
+            progress.stop_reason = "empty page"
+            return
+
+        consecutive_zero_new = consecutive_zero_new + 1 if new_count == 0 else 0
+        if consecutive_zero_new >= ZERO_NEW_PAGES_BEFORE_STOP:
+            progress.stop_reason = f"{consecutive_zero_new} consecutive pages with no new records"
+            return
+    progress.stop_reason = f"reached max_pages={max_pages}"
+
+
 def run_scrape(
-    search_state: Mapping[str, Any],
+    searches: Sequence[Search],
     out_dir: Path,
     *,
     client: PageSource,
     max_pages: int,
-    variant_name: str = "default",
     compress: bool = True,
 ) -> ScrapeResult:
-    """Scrape one search and write raw records plus a meta sidecar."""
+    """Scrape each search in turn into one raw file plus a meta sidecar.
+
+    ``max_pages`` applies to each search separately.
+    """
+    if not searches:
+        raise ValueError("run_scrape needs at least one search")
+
     stamp = _timestamp()
     out_dir.mkdir(parents=True, exist_ok=True)
     jobs_path = unique_path(with_compression(out_dir / f"jobs-{stamp}.jsonl", compress))
     meta_path = unique_path(out_dir / f"meta-{stamp}.json")
 
-    seen_keys: set[str] = set()
-    keyless_records = 0
-    pages_meta: list[JsonDict] = []
-    build_ids: list[str] = []
-    reported_totals: dict[str, float] = {}
-    consecutive_zero_new = 0
-    stop_reason = "unknown"
+    written_keys: set[str] = set()
+    progress: list[_Progress] = []
     error: str | None = None
 
     meta: JsonDict = {
         "started_at": datetime.now(UTC).isoformat(),
-        "variant": variant_name,
-        "searchState": dict(search_state),
         "max_pages": max_pages,
         "jobs_file": jobs_path.name,
         "compressed": compress,
-        "pages": pages_meta,
-        "build_ids": build_ids,
-        "reported_totals": reported_totals,
     }
 
     def write_meta() -> None:
         meta["finished_at"] = datetime.now(UTC).isoformat()
-        meta["unique_records"] = len(seen_keys)
-        meta["keyless_records"] = keyless_records
-        meta["pages_fetched"] = len(pages_meta)
-        meta["stop_reason"] = stop_reason
+        meta["unique_records"] = len(written_keys)
+        meta["keyless_records"] = sum(p.keyless for p in progress)
+        meta["pages_fetched"] = sum(len(p.pages) for p in progress)
+        meta["stop_reason"] = _overall_stop_reason(progress)
         if error is not None:
             meta["error"] = error
+        meta["searches"] = [p.as_meta() for p in progress]
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     try:
         with JsonlWriter(jobs_path) as writer:
-            for page in client.iter_pages(search_state, max_pages):
-                if page.build_id and page.build_id not in build_ids:
-                    build_ids.append(page.build_id)
-                reported_totals.update(page.reported_totals)
-
-                new_count = 0
-                for record in page.records:
-                    key = record_key(record)
-                    if key is None:
-                        # No usable id: keep it (raw data is preserved as-is)
-                        # but count it, since it cannot be deduplicated.
-                        keyless_records += 1
-                    elif key in seen_keys:
-                        continue
-                    else:
-                        seen_keys.add(key)
-                    writer.write(record)
-                    new_count += 1
-                writer.flush()
-
-                pages_meta.append(
-                    {"page": page.label, "received": len(page.records), "new": new_count}
-                )
-                logger.info(
-                    "page %s: %d records, %d new (unique so far: %d)",
-                    page.label,
-                    len(page.records),
-                    new_count,
-                    len(seen_keys),
-                )
-
-                if not page.records:
-                    stop_reason = "empty page"
-                    break
-
-                consecutive_zero_new = consecutive_zero_new + 1 if new_count == 0 else 0
-                if consecutive_zero_new >= ZERO_NEW_PAGES_BEFORE_STOP:
-                    stop_reason = f"{consecutive_zero_new} consecutive pages with no new records"
-                    break
-            else:
-                stop_reason = f"reached max_pages={max_pages}"
+            for search in searches:
+                progress.append(_Progress(search))
+                _scrape_one(progress[-1], writer, written_keys, client, max_pages)
     except HiringCafeError as exc:
-        stop_reason = "error"
-        error = str(exc)
+        progress[-1].stop_reason = "error"
+        error = f"{progress[-1].search.name}: {exc}" if len(searches) > 1 else str(exc)
         write_meta()
         raise
     except KeyboardInterrupt:
-        stop_reason = "interrupted"
+        if progress:
+            progress[-1].stop_reason = "interrupted"
         write_meta()
         raise
 
@@ -171,8 +277,8 @@ def run_scrape(
     return ScrapeResult(
         jobs_path=jobs_path,
         meta_path=meta_path,
-        unique_records=len(seen_keys),
-        pages_fetched=len(pages_meta),
-        stop_reason=stop_reason,
-        reported_totals=dict(reported_totals),
+        unique_records=len(written_keys),
+        pages_fetched=sum(len(p.pages) for p in progress),
+        stop_reason=_overall_stop_reason(progress),
+        searches=tuple(p.result() for p in progress),
     )

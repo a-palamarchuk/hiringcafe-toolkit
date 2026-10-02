@@ -183,6 +183,35 @@ def _searchstate_path(data: dict[str, Any], path: Path) -> Path:
     return _resolve(raw, path)
 
 
+def _searchstate_paths(data: dict[str, Any], path: Path) -> tuple[Path, ...]:
+    """Resolve the job shortlist's searches, in the order they are scraped.
+
+    ``searchstate_paths`` lists several; the single ``searchstate_path`` form
+    is still accepted. Setting both is refused rather than merged, since one of
+    them is then a leftover the user believes is in effect.
+    """
+    search = _require_table(data, "search", path)
+    raw_list = search.get("searchstate_paths")
+    if raw_list is None:
+        return (_searchstate_path(data, path),)
+    if "searchstate_path" in search:
+        raise ConfigError(
+            f"{path}: [search] sets both searchstate_path and searchstate_paths; keep one"
+        )
+    if (
+        not isinstance(raw_list, list)
+        or not raw_list
+        or not all(isinstance(item, str) and item.strip() for item in raw_list)
+    ):
+        raise ConfigError(
+            f"{path}: [search].searchstate_paths must be a non-empty list of non-empty strings"
+        )
+    resolved = tuple(_resolve(item, path) for item in raw_list)
+    if len(set(resolved)) != len(resolved):
+        raise ConfigError(f"{path}: [search].searchstate_paths lists the same file twice")
+    return resolved
+
+
 def _resolve(raw: str, config_path: Path) -> Path:
     """Resolve a configured path against the config file.
 
@@ -303,7 +332,10 @@ class JobShortlistConfig:
     screen stage rather than being declared before anything reads them.
     """
 
-    searchstate_path: Path
+    searchstate_paths: tuple[Path, ...]
+    """Searches scraped into one raw file each run, in this order. One
+    file per run keeps every later stage reading a single newest input, and
+    lets dedup and the seen store treat a job found by two searches as one."""
     scrape: ScrapeSettings
     screen: ScreenSettings = ScreenSettings()
     visit_log_path: Path | None = None
@@ -352,7 +384,7 @@ def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
     """Load and validate ``config/job_shortlist.toml``."""
     data = _read_toml(path)
     return JobShortlistConfig(
-        searchstate_path=_searchstate_path(data, path),
+        searchstate_paths=_searchstate_paths(data, path),
         scrape=_scrape_settings(data, path),
         screen=_screen_settings(data, path),
         visit_log_path=_visit_log_path(data, path),

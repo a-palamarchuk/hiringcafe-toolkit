@@ -29,8 +29,10 @@ from hiringcafe_toolkit.api.client import (
 JsonDict = dict[str, Any]
 
 
-def landing_html(build_id: str, page_props: JsonDict) -> str:
-    payload = {"buildId": build_id, "props": {"pageProps": page_props}}
+def landing_html(build_id: str, page_props: JsonDict, page: str | None = None) -> str:
+    payload: JsonDict = {"buildId": build_id, "props": {"pageProps": page_props}}
+    if page is not None:
+        payload["page"] = page
     return (
         '<html><body><script id="__NEXT_DATA__" type="application/json">'
         + json.dumps(payload)
@@ -146,6 +148,52 @@ def test_iter_pages_skips_data_route_when_ssr_is_empty() -> None:
 
     assert labels == ["ssr"]
     assert calls["data"] == 0
+
+
+def test_data_route_follows_the_page_the_landing_request_rendered() -> None:
+    """The search page moved from / to /classic; index.json then only redirects."""
+    data_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "_next/data" in request.url.path:
+            data_paths.append(request.url.path)
+            return httpx.Response(200, json={"pageProps": {"ssrHits": []}})
+        return httpx.Response(
+            200, html=landing_html("b", {"ssrHits": records("a")}, page="/classic")
+        )
+
+    with make_client(handler) as api:
+        list(api.iter_pages({}, max_pages=5))
+
+    assert data_paths == ["/_next/data/b/classic.json"]
+
+
+def test_a_root_page_uses_the_index_route() -> None:
+    data_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "_next/data" in request.url.path:
+            data_paths.append(request.url.path)
+            return httpx.Response(200, json={"pageProps": {"ssrHits": []}})
+        return httpx.Response(200, html=landing_html("b", {"ssrHits": records("a")}, page="/"))
+
+    with make_client(handler) as api:
+        list(api.iter_pages({}, max_pages=5))
+
+    assert data_paths == ["/_next/data/b/index.json"]
+
+
+def test_a_redirect_payload_is_never_read_as_an_empty_page() -> None:
+    """Reading it as a page would end the run early and report it as finished."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "_next/data" in request.url.path:
+            redirect = {"__N_REDIRECT": "/classic?searchState=x", "__N_REDIRECT_STATUS": 307}
+            return httpx.Response(200, json={"pageProps": redirect, "__N_SSP": True})
+        return httpx.Response(200, html=landing_html("b", {"ssrHits": records("a")}))
+
+    with make_client(handler) as api, pytest.raises(HiringCafeError, match="went stale"):
+        list(api.iter_pages({}, max_pages=5))
 
 
 # ----- resilience --------------------------------------------------------

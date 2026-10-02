@@ -23,7 +23,7 @@ from hiringcafe_toolkit.common.config import (
     load_search_state,
 )
 from hiringcafe_toolkit.common.jsonl import read_jsonl
-from hiringcafe_toolkit.common.scrape import ScrapeResult, run_scrape
+from hiringcafe_toolkit.common.scrape import ScrapeResult, Search, run_scrape
 from hiringcafe_toolkit.company_discovery.render import run_render
 from hiringcafe_toolkit.company_discovery.rollup import RollupOptions, run_rollup
 from hiringcafe_toolkit.company_discovery.visited_filter import (
@@ -66,7 +66,7 @@ company_discovery_app = typer.Typer(
     no_args_is_help=True,
 )
 job_shortlist_app = typer.Typer(
-    help="Daily scrape and shortlist of new job postings (NOVA, then staged US remote).",
+    help="Daily scrape and shortlist of new job postings (NOVA and US remote).",
     no_args_is_help=True,
 )
 
@@ -98,14 +98,26 @@ def _echo_scrape_result(result: ScrapeResult) -> None:
     typer.echo(f"Records:  {result.jobs_path}")
     typer.echo(f"Meta:     {result.meta_path}")
     typer.echo(f"Unique:   {result.unique_records} over {result.pages_fetched} pages")
-    typer.echo(f"Stopped:  {result.stop_reason}")
-    for key, value in sorted(result.reported_totals.items()):
-        typer.echo(f"Reported: {key} = {value:g}")
-    if result.stop_reason.startswith("reached max_pages"):
-        typer.secho(
-            "  This run hit the page ceiling and did not finish. Re-run with a higher --max-pages.",
-            fg=typer.colors.YELLOW,
+    for search in result.searches:
+        typer.echo("")
+        overlap = (
+            f" ({search.already_written} already found by an earlier search)"
+            if search.already_written
+            else ""
         )
+        typer.echo(
+            f"{search.name}: {search.unique_records} unique{overlap} "
+            f"over {search.pages_fetched} pages"
+        )
+        typer.echo(f"  Stopped:  {search.stop_reason}")
+        for key, value in sorted(search.reported_totals.items()):
+            typer.echo(f"  Reported: {key} = {value:g}")
+        if search.truncated:
+            typer.secho(
+                "  This search hit the page ceiling and did not finish. "
+                "Re-run with a higher --max-pages.",
+                fg=typer.colors.YELLOW,
+            )
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -136,7 +148,9 @@ def company_discovery_scrape(
 
     try:
         settings = load_company_discovery_config(config)
-        search_state = load_search_state(settings.searchstate_path)
+        search = Search(
+            settings.searchstate_path.stem, load_search_state(settings.searchstate_path)
+        )
     except ConfigError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
@@ -147,11 +161,10 @@ def company_discovery_scrape(
     typer.echo(f"searchState: {settings.searchstate_path}")
     with HiringCafeClient(delay_seconds=effective_delay) as client:
         result = run_scrape(
-            search_state,
+            [search],
             out_dir,
             client=client,
             max_pages=effective_max_pages,
-            variant_name=settings.searchstate_path.stem,
             compress=settings.scrape.compress,
         )
 
@@ -348,12 +361,14 @@ def job_shortlist_scrape(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
 ) -> None:
-    """Fetch raw job records for the configured shortlist search."""
+    """Fetch raw job records for every configured shortlist search, into one file."""
     _configure_logging(verbose)
 
     try:
         settings = load_job_shortlist_config(config)
-        search_state = load_search_state(settings.searchstate_path)
+        searches = [
+            Search(path.stem, load_search_state(path)) for path in settings.searchstate_paths
+        ]
     except ConfigError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
@@ -362,21 +377,21 @@ def job_shortlist_scrape(
     effective_max_pages = max_pages if max_pages is not None else settings.scrape.max_pages
     compress = settings.scrape.compress and not no_compress
 
-    window = search_state.get("dateFetchedPastNDays")
-    typer.echo(f"searchState: {settings.searchstate_path}")
-    if isinstance(window, int):
-        # Surfaced because it is the parameter most likely to be wrong after a
-        # searchState is re-copied from the UI, and a too-narrow window loses
-        # postings that cannot be recovered on a later run.
-        typer.echo(f"Fetch window: {window} days")
+    for path, search in zip(settings.searchstate_paths, searches, strict=True):
+        typer.echo(f"searchState: {path}")
+        window = search.state.get("dateFetchedPastNDays")
+        if isinstance(window, int):
+            # Surfaced because it is the parameter most likely to be wrong
+            # after a searchState is re-copied from the UI, and a too-narrow
+            # window loses postings that cannot be recovered on a later run.
+            typer.echo(f"  Fetch window: {window} days")
 
     with HiringCafeClient(delay_seconds=effective_delay) as client:
         result = run_scrape(
-            search_state,
+            searches,
             out_dir,
             client=client,
             max_pages=effective_max_pages,
-            variant_name=settings.searchstate_path.stem,
             compress=compress,
         )
 

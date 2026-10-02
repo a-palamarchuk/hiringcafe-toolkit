@@ -176,7 +176,7 @@ def test_job_shortlist_config_defaults_to_compressed(tmp_path: Path) -> None:
     )
     config = load_job_shortlist_config(path)
 
-    assert config.searchstate_path == (tmp_path / "searchstates/local.json").resolve()
+    assert config.searchstate_paths == ((tmp_path / "searchstates/local.json").resolve(),)
     assert config.scrape.compress is True
     assert config.scrape.delay_seconds == DEFAULT_DELAY_SECONDS
 
@@ -198,6 +198,36 @@ def test_job_shortlist_config_rejects_non_boolean_compress(tmp_path: Path) -> No
         tmp_path, '[search]\nsearchstate_path = "s.json"\n[scrape]\ncompress = "yes"\n'
     )
     with pytest.raises(ConfigError, match="compress must be true or false"):
+        load_job_shortlist_config(path)
+
+
+def test_job_shortlist_config_reads_several_searchstates_in_order(tmp_path: Path) -> None:
+    path = write_shortlist_config(
+        tmp_path, '[search]\nsearchstate_paths = ["s/local.json", "s/remote.json"]\n'
+    )
+    config = load_job_shortlist_config(path)
+
+    assert config.searchstate_paths == (
+        (tmp_path / "s/local.json").resolve(),
+        (tmp_path / "s/remote.json").resolve(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("search", "message"),
+    [
+        ('searchstate_path = "a.json"\nsearchstate_paths = ["b.json"]', "both"),
+        ("searchstate_paths = []", "non-empty list"),
+        ('searchstate_paths = ["a.json", ""]', "non-empty list"),
+        ('searchstate_paths = "a.json"', "non-empty list"),
+        ('searchstate_paths = ["a.json", "./a.json"]', "same file twice"),
+    ],
+)
+def test_job_shortlist_config_rejects_bad_searchstate_lists(
+    tmp_path: Path, search: str, message: str
+) -> None:
+    path = write_shortlist_config(tmp_path, f"[search]\n{search}\n")
+    with pytest.raises(ConfigError, match=message):
         load_job_shortlist_config(path)
 
 

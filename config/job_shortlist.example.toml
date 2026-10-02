@@ -9,7 +9,18 @@
 # 21-day fetch window). The window is a missed-run recovery buffer, not a
 # freshness filter - freshness comes from the diff stage. Three weeks of slack
 # costs about a minute of scraping.
-searchstate_path = "searchstates/local-30mi-short.json"
+#
+# Several searches are scraped in order into one raw file, so a job found by
+# more than one is written, screened, and surfaced once. The remote search has
+# no location, only the top-level workplaceTypes = ["Remote"] (results came
+# back US-scoped and in USD when probed); give it the same departments,
+# commitment, and clearance filters as the local one, plus the UI's salary
+# filter at comp_floor with "Transparent salaries only" OFF - that filter keeps
+# postings stating no salary, and cuts a nationwide search to a scrapeable size.
+searchstate_paths = [
+    "searchstates/local-30mi-short.json",
+    "searchstates/remote-us.json",
+]
 
 [scrape]
 # Seconds between page requests. Keep a real delay: this is an undocumented
@@ -27,7 +38,7 @@ compress = true
 # A posting whose STATED ceiling falls below this is rejected. Postings that
 # state nothing are never rejected on compensation - roughly a fifth of results
 # disclose no salary, and they include some of the best matches.
-comp_floor = 180000
+comp_floor = 190000
 
 # A stated band whose BOTTOM falls below this is demoted, not rejected. A wide
 # band means the ceiling may belong to a different level or a pricier metro

@@ -17,7 +17,7 @@ import pytest
 
 from hiringcafe_toolkit.api.client import HiringCafeError, ResultPage
 from hiringcafe_toolkit.common.jsonl import read_jsonl
-from hiringcafe_toolkit.common.scrape import run_scrape
+from hiringcafe_toolkit.common.scrape import Search, run_scrape
 
 JsonDict = dict[str, Any]
 
@@ -58,7 +58,13 @@ def read_meta(path: Path) -> JsonDict:
 def run(tmp_path: Path, client: Any, max_pages: int = 50, compress: bool = False) -> Any:
     # Defaults to uncompressed so the existing assertions read plain files;
     # compression itself is covered explicitly below.
-    return run_scrape({"q": 1}, tmp_path, client=client, max_pages=max_pages, compress=compress)
+    return run_scrape(
+        [Search("local", {"q": 1})],
+        tmp_path,
+        client=client,
+        max_pages=max_pages,
+        compress=compress,
+    )
 
 
 def test_records_are_written_verbatim_and_deduplicated(tmp_path: Path) -> None:
@@ -115,16 +121,21 @@ def test_meta_captures_run_shape(tmp_path: Path) -> None:
     )
     result = run(tmp_path, client)
     meta = read_meta(result.meta_path)
+    [search] = meta["searches"]
 
-    assert meta["searchState"] == {"q": 1}
-    assert meta["pages"] == [
+    assert search["variant"] == "local"
+    assert search["searchState"] == {"q": 1}
+    assert search["pages"] == [
         {"page": "ssr", "received": 2, "new": 2},
         {"page": "1", "received": 2, "new": 1},
         {"page": "2", "received": 0, "new": 0},
     ]
-    assert meta["reported_totals"] == {"ssrTotalCount": 9}
+    assert search["reported_totals"] == {"ssrTotalCount": 9}
+    assert search["build_ids"] == ["build-1"]
+    assert search["stop_reason"] == "empty page"
+    assert search["already_written"] == 0
     assert meta["unique_records"] == 3
-    assert meta["build_ids"] == ["build-1"]
+    assert meta["pages_fetched"] == 3
     assert meta["stop_reason"] == "empty page"
     assert meta["keyless_records"] == 0
 
@@ -153,9 +164,122 @@ def test_partial_results_and_meta_survive_a_failure(tmp_path: Path) -> None:
 
 def test_output_directory_is_created(tmp_path: Path) -> None:
     target = tmp_path / "deep" / "raw"
-    result = run_scrape({"q": 1}, target, client=StubClient([page("ssr", "a")]), max_pages=1)
+    result = run_scrape(
+        [Search("local", {"q": 1})], target, client=StubClient([page("ssr", "a")]), max_pages=1
+    )
 
     assert result.jobs_path.parent == target
+
+
+# ----- several searches --------------------------------------------------
+
+
+class MultiStubClient:
+    """Serves canned pages per search, keyed by the searchState's ``q``."""
+
+    def __init__(self, pages: dict[str, list[ResultPage]], error_on: str | None = None) -> None:
+        self.pages = pages
+        self.error_on = error_on
+        self.consumed: dict[str, int] = {}
+
+    def iter_pages(self, search_state: Mapping[str, Any], max_pages: int) -> Iterator[ResultPage]:
+        name = str(search_state["q"])
+        self.consumed[name] = 0
+        for item in self.pages[name][:max_pages]:
+            self.consumed[name] += 1
+            yield item
+        if name == self.error_on:
+            raise HiringCafeError("boom")
+
+
+def run_many(tmp_path: Path, client: Any, max_pages: int = 50) -> Any:
+    searches = [Search(name, {"q": name}) for name in client.pages]
+    return run_scrape(searches, tmp_path, client=client, max_pages=max_pages, compress=False)
+
+
+def test_a_record_found_by_two_searches_is_written_once(tmp_path: Path) -> None:
+    client = MultiStubClient(
+        {"local": [page("ssr", "a", "b"), page("1")], "remote": [page("ssr", "b", "c"), page("1")]}
+    )
+    result = run_many(tmp_path, client)
+
+    assert [r["objectID"] for r in read_jsonl(result.jobs_path)] == ["a", "b", "c"]
+    assert result.unique_records == 3
+    remote = result.searches[1]
+    assert (remote.unique_records, remote.already_written) == (2, 1)
+
+
+def test_overlap_with_an_earlier_search_does_not_stop_a_later_one(tmp_path: Path) -> None:
+    """A nationwide search opens with remote jobs near home the local one found.
+
+    Those pages are new to the remote search, so they must not count toward
+    the consecutive-no-new stop rule.
+    """
+    client = MultiStubClient(
+        {
+            "local": [page("ssr", "a", "b"), page("1", "c", "d"), page("2")],
+            "remote": [
+                page("ssr", "a", "b"),
+                page("1", "c", "d"),
+                page("2", "e"),
+                page("3"),
+            ],
+        }
+    )
+    result = run_many(tmp_path, client)
+
+    assert client.consumed["remote"] == 4
+    assert result.searches[1].stop_reason == "empty page"
+    assert [r["objectID"] for r in read_jsonl(result.jobs_path)] == ["a", "b", "c", "d", "e"]
+
+
+def test_meta_has_an_entry_per_search(tmp_path: Path) -> None:
+    client = MultiStubClient(
+        {
+            "local": [page("ssr", "a", totals={"ssrTotalCount": 1}), page("1")],
+            "remote": [page("ssr", "a", "b", totals={"ssrTotalCount": 2})],
+        }
+    )
+    result = run_many(tmp_path, client, max_pages=1)
+    meta = read_meta(result.meta_path)
+
+    assert [s["variant"] for s in meta["searches"]] == ["local", "remote"]
+    assert [s["reported_totals"] for s in meta["searches"]] == [
+        {"ssrTotalCount": 1},
+        {"ssrTotalCount": 2},
+    ]
+    assert meta["searches"][1]["already_written"] == 1
+    assert meta["unique_records"] == 2
+    assert meta["stop_reason"] == "local: reached max_pages=1; remote: reached max_pages=1"
+    assert result.truncated
+
+
+def test_max_pages_applies_to_each_search(tmp_path: Path) -> None:
+    client = MultiStubClient(
+        {"local": [page("ssr", "a"), page("1", "b")], "remote": [page("ssr", "c"), page("1", "d")]}
+    )
+    run_many(tmp_path, client, max_pages=2)
+
+    assert client.consumed == {"local": 2, "remote": 2}
+
+
+def test_a_failing_later_search_keeps_earlier_records_and_names_itself(tmp_path: Path) -> None:
+    client = MultiStubClient(
+        {"local": [page("ssr", "a"), page("1")], "remote": [page("ssr", "b")]}, error_on="remote"
+    )
+    with pytest.raises(HiringCafeError):
+        run_many(tmp_path, client)
+
+    jobs = next(iter(sorted(tmp_path.glob("jobs-*.jsonl"))))
+    meta = read_meta(next(iter(sorted(tmp_path.glob("meta-*.json")))))
+    assert [r["objectID"] for r in read_jsonl(jobs)] == ["a", "b"]
+    assert [s["stop_reason"] for s in meta["searches"]] == ["empty page", "error"]
+    assert meta["error"] == "remote: boom"
+
+
+def test_no_searches_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="at least one search"):
+        run_scrape([], tmp_path, client=StubClient([]), max_pages=1)
 
 
 # ----- compression -------------------------------------------------------

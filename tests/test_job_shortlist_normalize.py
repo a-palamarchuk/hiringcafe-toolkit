@@ -114,6 +114,19 @@ def test_absent_seniority_stays_none_rather_than_defaulting() -> None:
     assert normalize_record(raw("a")).seniority_level is None
 
 
+def test_air_travel_is_projected() -> None:
+    assert normalize_record(raw("a", air_travel_requirement="Moderate")).air_travel == "Moderate"
+    assert normalize_record(raw("b")).air_travel is None
+
+
+def test_a_stored_posting_without_air_travel_still_loads() -> None:
+    """Interim files and the seen store written before the field existed."""
+    record = normalize_record(raw("a")).as_record()
+    del record["air_travel"]
+
+    assert Posting.from_record(record).air_travel is None
+
+
 def test_normalized_title_collapses_whitespace_and_case() -> None:
     assert normalized_title("  Software   Engineer II ") == "software engineer ii"
 

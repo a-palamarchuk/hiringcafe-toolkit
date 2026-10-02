@@ -47,9 +47,15 @@ be run, tested, and scheduled independently. Changing a filter should never mean
 
 hiring.cafe publishes no documented API. This toolkit makes the same requests the site's own
 frontend makes: it reads the search page for the current Next.js build id and first page of
-results, then walks `/_next/data/<build_id>/index.json` for subsequent pages. The build id
+results, then walks `/_next/data/<build_id>/<route>.json` for subsequent pages. The build id
 changes on every deploy, so it is read at run time and refreshed automatically if it goes stale
 mid-run.
+
+The route is read at run time as well, from the page the search request lands on. Around
+2026-09-30 the search page moved from `/` to `/classic`; the old `index.json` route then
+answered every page with a redirect and no records, which the scrape took for the end of the
+results and stopped after the first page. A redirect payload is now treated as a stale build -
+refresh, retry, and fail loudly if it persists - never as an empty page.
 
 Because the interface is undocumented, it can change without notice. Two consequences shape the
 design: raw responses are stored verbatim so later stages can be rewritten without re-scraping,
@@ -269,7 +275,7 @@ posted that I should apply to*. The unit is the posting, filters are tight, and 
 scheduled rather than occasional.
 
 ```bash
-# Stage 1: fetch raw job records for the configured shortlist search
+# Stage 1: fetch raw job records for every configured shortlist search
 uv run hiringcafe-toolkit job-shortlist scrape
 
 # Smoke run before committing to a full one
@@ -281,8 +287,18 @@ records file is gzipped by default:
 
 | File | Contents |
 |---|---|
-| `jobs-<timestamp>.jsonl.gz` | One raw record per line, deduplicated by `objectID`, otherwise untouched |
-| `meta-<timestamp>.json` | searchState used, fetch window, per-page counts, build ids, reported totals, stop reason |
+| `jobs-<timestamp>.jsonl.gz` | One raw record per line, deduplicated by `objectID` across every search, otherwise untouched |
+| `meta-<timestamp>.json` | One entry per search: searchState, per-page counts, build ids, reported totals, overlap with earlier searches, stop reason |
+
+**Several searches, one file.** `[search].searchstate_paths` lists searches scraped in order
+into a single raw file - currently the local 30-mile search and a US-wide remote one. One file
+per run keeps every later stage reading a single newest input, and a remote job near home that
+both searches find is written once, so the report and the seen store treat it as one posting.
+Two details keep this honest. The page ceiling applies to each search separately. And the stop
+rule ("two consecutive pages with nothing new") counts records new to *that search*, not to
+the file: the remote search opens with pages of nearby remote jobs the local search already
+wrote, and counting those as stale would end it after two pages. Each search's
+`already_written` in the meta is that overlap.
 
 **On the fetch window.** Keep `dateFetchedPastNDays` at 21. The window is not a freshness filter -
 freshness comes from comparing against postings already seen. It is a *missed-run recovery
@@ -367,6 +383,16 @@ like "Principal Engineer", so it only rejects when a management title or managem
 language corroborates it. `seniority_level` disagrees with the level written in the
 posting's own title about one time in seven, in both directions, so the raw title's level
 marker is read alongside it.
+
+Frequent air travel (`air_travel_requirement` Moderate or Extensive) demotes. It marks field,
+consulting, and implementation work - "remote" roles spent at client sites - and was measured
+at 134 of 5991 postings: implementation consultants, forward-deployed and commissioning
+engineers, field service. It demotes rather than rejects because the level is vendor-inferred.
+
+Remote postings are screened like any other. The data encodes a remote role's scope several
+ways - open US-wide, limited to listed states, or naming only cities - and measured on 669
+remote postings the split was 228 / 77 / 359. What a state list or a city list means for who
+may apply is not clear enough to filter on, so nothing reads those fields.
 
 **Every applicable reason is recorded**, not the first to fire. Stopping at the first
 match makes "would have been strong except for compensation" unanswerable, and that is

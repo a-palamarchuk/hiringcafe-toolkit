@@ -152,6 +152,13 @@ OPS_TITLE = re.compile(
     re.I,
 )
 
+#: Air travel levels that mark field, consulting, and implementation work -
+#: "remote" roles spent at client sites. Measured at 134 of 5991 postings;
+#: the remote ones were implementation consultants, forward-deployed and
+#: commissioning engineers, and field service. Demotes rather than rejects
+#: because the level is vendor-inferred.
+FREQUENT_AIR_TRAVEL = frozenset({"Moderate", "Extensive"})
+
 #: Management corroboration for the People Manager flag.
 MANAGEMENT_TITLE = re.compile(
     r"\bmanager\b|\bdirector\b|head of|\bvp\b|vice president|\bchief\b|supervisor"
@@ -291,6 +298,9 @@ def demote_reasons(posting: Posting, settings: ScreenSettings) -> list[str]:
         reasons.append("hardware/physical title")
     if OPS_TITLE.search(title):
         reasons.append("network/IT ops title")
+
+    if posting.air_travel in FREQUENT_AIR_TRAVEL:
+        reasons.append("frequent air travel")
 
     tools = _tools(posting)
     if not BUILD_TOOLS.search(tools):

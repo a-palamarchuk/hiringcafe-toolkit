@@ -30,7 +30,7 @@ from hiringcafe_toolkit.common.location import (
     parse_state,
     select_nearby_places,
 )
-from hiringcafe_toolkit.common.scrape import ScrapeResult, run_scrape
+from hiringcafe_toolkit.common.scrape import ScrapeResult, Search, SearchResult, run_scrape
 from hiringcafe_toolkit.common.urls import host_to_url, normalize_host
 
 __all__ = [
@@ -46,6 +46,8 @@ __all__ = [
     "RollupSettings",
     "ScrapeResult",
     "ScrapeSettings",
+    "Search",
+    "SearchResult",
     "build_places",
     "haversine_miles",
     "host_to_url",

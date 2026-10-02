@@ -1,0 +1,8 @@
+{
+  "workplaceTypes":["Remote"],
+  "commitmentTypes":["Full Time"],
+  "dateFetchedPastNDays":21,
+  "departments":["Engineering","Software Development","Information Technology","Data and Analytics","Research and Development (R&D)"],
+  "maxCompensationLowEnd":"190000",
+  "securityClearances":["None","Public Trust","Other"]
+}
