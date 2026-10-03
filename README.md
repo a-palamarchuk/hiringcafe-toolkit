@@ -31,6 +31,8 @@ hiringcafe-toolkit/
 │   ├── company_discovery/     # Scrape -> Rollup -> Filter -> Render career-page discovery
 │   ├── job_shortlist/         # Daily scrape and shortlist of new job postings
 │   └── cli.py                 # `hiringcafe-toolkit` entry point
+├── extensions/
+│   └── hiringcafe-capture/    # Firefox extension: save result pages browsed by hand
 ├── config/                    # *.example.toml checked in; real *.toml gitignored
 ├── data/                      # generated datasets; structure tracked, contents gitignored
 │   ├── company_discovery/{raw,interim,processed}/
@@ -594,6 +596,59 @@ Two things that make skipping safe. The 21-day fetch window is three weeks of mi
 slack, so a skipped week costs nothing. And rendered pages are never overwritten, so an
 unread backlog waits in the file it was first written to - use `--band strong` to generate
 a shorter page when the `possible` section is too long to face.
+
+#### When the scraper is blocked: capturing in the browser
+
+Some days hiring.cafe answers the scraper with a Cloudflare challenge - HTTP 403, a
+`cf-mitigated: challenge` header, a "Just a moment..." page - and `scrape` fails on its first
+request. That is the site deciding to turn automated clients away, so the scraper does not try
+to get past it: no challenge solvers, no borrowed browser cookies. On those days the search is
+run by hand in Firefox instead, and a small extension saves the pages the browser receives.
+
+The extension, in `extensions/hiringcafe-capture/`, only watches. It never pages, clicks, or
+requests anything itself, and passes every response through to the page unchanged. It saves
+each result page whole - the first page from the HTML, later ones from the `classic.json`
+requests "next page" makes - tagged with the searchState and page number from its URL.
+Finding the postings in a page is left to the same Python code the live client uses.
+
+**Install** it as a temporary add-on: `about:debugging` -> This Firefox -> Load Temporary
+Add-on -> `extensions/hiringcafe-capture/manifest.json`. Its button (a blue page icon) appears
+on the toolbar; Clear, Save, and the per-search counts are in the popup that button opens -
+nothing pops up by itself. Temporary add-ons are removed when Firefox restarts, taking any
+unsaved pages with them, so Save before closing Firefox and reload the add-on next session.
+
+**Each blocked day:**
+
+1. Click the extension's toolbar button and **Clear** in its popup (two clicks: the button
+   turns into "Click again to clear") to drop the previous session's pages.
+2. `make urls` prints a link per configured search. Open each - the links carry the exact
+   saved searchState, and import refuses a capture of anything else.
+3. Click **next page** through to the end of each search. The popup shows, per search, the
+   pages captured, any gaps, and the posting count on the last page; a short last page means
+   the end was reached.
+4. **Save** in the popup. The capture downloads to `~/Downloads/hiringcafe-capture/`
+   (`[capture].dir`) and appears in Firefox's Downloads panel.
+5. Run the rest from the capture:
+
+   ```bash
+   make shortlist-import
+   ```
+
+   which is `job-shortlist import` - writing the same `jobs-*.jsonl.gz` and meta a scrape
+   writes, from the newest capture - followed by the usual four stages.
+
+What import checks, because each of these would otherwise produce a run that looks complete:
+
+- **Every configured search must be in the capture.** A missing one stops the import; the diff
+  would otherwise report nothing new for it.
+- **Only an identical searchState matches.** Captures of other searches - anything browsed
+  with the extension loaded - are skipped with a warning naming them.
+- **Gaps are reported**, with the missing page numbers, and recorded in the meta under
+  `captures`. A page the browser served from its cache never reaches the extension; reload it.
+- **Pages captured over more than six hours** are flagged as a likely uncleared earlier session.
+
+The site's reported total is not a completeness check here or anywhere: it counts duplicate
+listings, measured at 4326 reported against 2347 unique records on one run.
 
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every

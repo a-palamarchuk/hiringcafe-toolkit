@@ -107,6 +107,28 @@ def test_empty_page_stops_the_run(tmp_path: Path) -> None:
     assert result.stop_reason == "empty page"
 
 
+def test_a_source_that_ends_early_is_not_reported_as_the_ceiling(tmp_path: Path) -> None:
+    """A capture file can end on a non-empty page; that is not truncation."""
+    client = StubClient([page("ssr", "a"), page("1", "b")])
+    result = run(tmp_path, client, max_pages=10)
+
+    assert result.stop_reason == "no more pages"
+    assert not result.truncated
+
+
+def test_extra_meta_is_recorded(tmp_path: Path) -> None:
+    result = run_scrape(
+        [Search("local", {"q": 1})],
+        tmp_path,
+        client=StubClient([page("ssr", "a"), page("1")]),
+        max_pages=5,
+        compress=False,
+        extra_meta={"source": "browser capture"},
+    )
+
+    assert read_meta(result.meta_path)["source"] == "browser capture"
+
+
 def test_exhausting_the_client_reports_max_pages(tmp_path: Path) -> None:
     client = StubClient([page("ssr", "a"), page("1", "b")])
     result = run(tmp_path, client, max_pages=1)
@@ -185,7 +207,8 @@ class MultiStubClient:
     def iter_pages(self, search_state: Mapping[str, Any], max_pages: int) -> Iterator[ResultPage]:
         name = str(search_state["q"])
         self.consumed[name] = 0
-        for item in self.pages[name][:max_pages]:
+        # Like the live client: the first page plus up to ``max_pages`` more.
+        for item in self.pages[name][: max_pages + 1]:
             self.consumed[name] += 1
             yield item
         if name == self.error_on:
@@ -236,8 +259,8 @@ def test_overlap_with_an_earlier_search_does_not_stop_a_later_one(tmp_path: Path
 def test_meta_has_an_entry_per_search(tmp_path: Path) -> None:
     client = MultiStubClient(
         {
-            "local": [page("ssr", "a", totals={"ssrTotalCount": 1}), page("1")],
-            "remote": [page("ssr", "a", "b", totals={"ssrTotalCount": 2})],
+            "local": [page("ssr", "a", totals={"ssrTotalCount": 1}), page("1", "c")],
+            "remote": [page("ssr", "a", "b", totals={"ssrTotalCount": 2}), page("1", "d")],
         }
     )
     result = run_many(tmp_path, client, max_pages=1)
@@ -249,7 +272,7 @@ def test_meta_has_an_entry_per_search(tmp_path: Path) -> None:
         {"ssrTotalCount": 2},
     ]
     assert meta["searches"][1]["already_written"] == 1
-    assert meta["unique_records"] == 2
+    assert meta["unique_records"] == 4
     assert meta["stop_reason"] == "local: reached max_pages=1; remote: reached max_pages=1"
     assert result.truncated
 
@@ -258,7 +281,7 @@ def test_max_pages_applies_to_each_search(tmp_path: Path) -> None:
     client = MultiStubClient(
         {"local": [page("ssr", "a"), page("1", "b")], "remote": [page("ssr", "c"), page("1", "d")]}
     )
-    run_many(tmp_path, client, max_pages=2)
+    run_many(tmp_path, client, max_pages=1)
 
     assert client.consumed == {"local": 2, "remote": 2}
 

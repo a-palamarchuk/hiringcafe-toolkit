@@ -13,6 +13,7 @@ from hiringcafe_toolkit.api.client import (
     find_records,
     find_reported_totals,
     record_key,
+    search_url,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "find_records",
     "find_reported_totals",
     "record_key",
+    "search_url",
 ]

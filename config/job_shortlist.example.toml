@@ -57,6 +57,12 @@ wide_geography_cities = 5
 # repeat offenders in the screen output rather than guessing up front.
 company_blocklist = []
 
+[capture]
+# Where `job-shortlist import` looks for the newest browser capture: Firefox's
+# download directory plus the subdirectory the capture extension saves into.
+# Only needed on days hiring.cafe blocks the scraper; see the README.
+dir = "~/Downloads/hiringcafe-capture"
+
 [visit_logger]
 # JSON export from the VisitLogger browser extension. Read by the diff stage for
 # `opened` and `applied` labels, and by render to mark employers a resume has

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>hiring.cafe capture</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --line: #d1d9e0;
+        --warn: #9a6700;
+        --button: #f6f8fa;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1b22;
+          --fg: #e6edf3;
+          --muted: #9198a1;
+          --line: #3d444d;
+          --warn: #d29922;
+          --button: #2b2a33;
+        }
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.4 system-ui, sans-serif;
+        margin: 0;
+        padding: 12px;
+        width: 380px;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      .search {
+        border-top: 1px solid var(--line);
+        padding: 8px 0;
+      }
+      .label {
+        font-weight: 600;
+      }
+      .detail {
+        color: var(--muted);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .empty {
+        color: var(--muted);
+        padding: 8px 0;
+      }
+      .actions {
+        border-top: 1px solid var(--line);
+        display: flex;
+        gap: 8px;
+        padding-top: 10px;
+      }
+      button {
+        background: var(--button);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--fg);
+        cursor: pointer;
+        font: inherit;
+        padding: 4px 12px;
+      }
+      #status {
+        color: var(--muted);
+        margin-top: 8px;
+        min-height: 1.4em;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>hiring.cafe capture</h1>
+    <div id="searches"></div>
+    <div class="actions">
+      <button id="save" type="button">Save</button>
+      <button id="clear" type="button">Clear</button>
+    </div>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -15,7 +15,14 @@ from typing import Annotated
 
 import typer
 
-from hiringcafe_toolkit.api import HiringCafeClient
+from hiringcafe_toolkit.api import HiringCafeClient, search_url
+from hiringcafe_toolkit.common.capture import (
+    CapturedSearch,
+    CaptureError,
+    CapturePageSource,
+    load_capture,
+    match_captures,
+)
 from hiringcafe_toolkit.common.config import (
     ConfigError,
     load_company_discovery_config,
@@ -56,6 +63,12 @@ SHORTLIST_GLOB = "shortlist-*.jsonl*"
 #: Raw scrape output may be gzipped or not; stages accept either, so lookups
 #: glob both rather than assuming whichever the last run happened to write.
 JOBS_GLOB = "jobs-*.jsonl*"
+
+CAPTURE_GLOB = "capture-*.json"
+
+#: A capture whose pages span longer than this probably mixes an earlier
+#: session's pages into today's. Paging through one search takes minutes.
+CAPTURE_SPAN_WARNING_HOURS = 6.0
 
 app = typer.Typer(
     help="Personal hiring.cafe scraping and processing toolkit.", no_args_is_help=True
@@ -395,6 +408,136 @@ def job_shortlist_scrape(
             compress=compress,
         )
 
+    _echo_scrape_result(result)
+
+
+@job_shortlist_app.command("urls")
+def job_shortlist_urls(
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+) -> None:
+    """Print the hiring.cafe link for each configured search, to run by hand.
+
+    Opening these links rather than rebuilding a search in the UI guarantees
+    the browser runs exactly the configured searchState, which ``import``
+    requires.
+    """
+    try:
+        settings = load_job_shortlist_config(config)
+        states = [load_search_state(path) for path in settings.searchstate_paths]
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    for path, state in zip(settings.searchstate_paths, states, strict=True):
+        typer.echo(f"{path.stem}:")
+        typer.echo(f"  {search_url(state)}")
+
+
+def _echo_capture(name: str, capture: CapturedSearch) -> None:
+    pages = capture.page_numbers
+    typer.echo(
+        f"{name}: captured pages {pages[0]}-{pages[-1]} ({len(pages)}), "
+        f"last page has {capture.last_page_records} records"
+    )
+    if capture.missing_pages:
+        typer.secho(
+            f"  Missing pages {capture.missing_pages}: their postings are not in this import. "
+            "Revisit them (reload the page if it came from the browser cache) and save again.",
+            fg=typer.colors.YELLOW,
+        )
+    span = capture.capture_span_hours
+    if span > CAPTURE_SPAN_WARNING_HOURS:
+        typer.secho(
+            f"  Pages were captured over {span:.0f} hours - likely an earlier session that was "
+            "never cleared. Clear the extension before the next capture.",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@job_shortlist_app.command("import")
+def job_shortlist_import(
+    capture: Annotated[
+        Path | None,
+        typer.Argument(help="Capture file saved by the browser extension. Defaults to the newest."),
+    ] = None,
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
+    ] = SHORTLIST_CONFIG_PATH,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", "-o", help="Directory for raw run output.")
+    ] = SHORTLIST_RAW_DIR,
+    no_compress: Annotated[
+        bool, typer.Option("--no-compress", help="Write raw records uncompressed.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
+) -> None:
+    """Write a raw scrape from pages captured in the browser, in place of scrape.
+
+    Every configured search must have been captured; a capture of any other
+    search is skipped with a warning.
+    """
+    _configure_logging(verbose)
+
+    try:
+        settings = load_job_shortlist_config(config)
+        searches = [
+            Search(path.stem, load_search_state(path)) for path in settings.searchstate_paths
+        ]
+    except ConfigError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    capture_path = capture if capture is not None else _newest(settings.capture_dir, CAPTURE_GLOB)
+    typer.echo(f"Capture: {capture_path}")
+    try:
+        captured = load_capture(capture_path)
+    except CaptureError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    matched, unmatched = match_captures([s.state for s in searches], captured)
+    for other in unmatched:
+        typer.secho(
+            f"Skipping {len(other.pages)} captured pages of a search that is not configured: "
+            f"{other.describe()}",
+            fg=typer.colors.YELLOW,
+        )
+    missing = [search.name for search, found in zip(searches, matched, strict=True) if not found]
+    if missing:
+        # Importing the rest would produce a run that looks complete and is
+        # not: the diff would show nothing new for the missing search.
+        typer.secho(
+            f"No captured pages for {', '.join(missing)}. Open its link from "
+            "`job-shortlist urls`, page through it, and save the capture again.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    found = [m for m in matched if m is not None]
+    typer.echo("")
+    for search, capture_entry in zip(searches, found, strict=True):
+        _echo_capture(search.name, capture_entry)
+
+    result = run_scrape(
+        searches,
+        out_dir,
+        client=CapturePageSource(found),
+        # Past the last captured page, so the capture ending is never read as
+        # the ceiling: the scrape stage counts the first page on top of these.
+        max_pages=max(max(c.page_numbers) for c in found) + 1,
+        compress=settings.scrape.compress and not no_compress,
+        extra_meta={
+            "source": "browser capture",
+            "capture_file": str(capture_path),
+            "captures": {
+                search.name: capture_entry.summary()
+                for search, capture_entry in zip(searches, found, strict=True)
+            },
+        },
+    )
     _echo_scrape_result(result)
 
 

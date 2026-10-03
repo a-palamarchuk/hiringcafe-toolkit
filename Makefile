@@ -1,4 +1,4 @@
-.PHONY: install lint format test check clean shortlist
+.PHONY: install lint format test check clean shortlist urls shortlist-import
 
 install:
 	uv sync --extra dev
@@ -27,6 +27,19 @@ clean:
 # failed scrape would otherwise have the rest quietly reprocess yesterday's.
 shortlist:
 	uv run hiringcafe-toolkit job-shortlist scrape
+	uv run hiringcafe-toolkit job-shortlist normalize
+	uv run hiringcafe-toolkit job-shortlist screen
+	uv run hiringcafe-toolkit job-shortlist diff
+	uv run hiringcafe-toolkit job-shortlist render
+
+# Links to open in Firefox when hiring.cafe blocks the scraper. Page through
+# each to the end with the capture extension loaded, then Save in its popup.
+urls:
+	uv run hiringcafe-toolkit job-shortlist urls
+
+# The same run from the newest browser capture instead of a live scrape.
+shortlist-import:
+	uv run hiringcafe-toolkit job-shortlist import
 	uv run hiringcafe-toolkit job-shortlist normalize
 	uv run hiringcafe-toolkit job-shortlist screen
 	uv run hiringcafe-toolkit job-shortlist diff

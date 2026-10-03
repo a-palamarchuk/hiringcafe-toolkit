@@ -44,6 +44,9 @@ JsonDict = dict[str, Any]
 #: mean the result set is exhausted. Two in a row does.
 ZERO_NEW_PAGES_BEFORE_STOP = 2
 
+#: Stop reason when a page source runs out before the page ceiling.
+STOP_SOURCE_ENDED = "no more pages"
+
 logger = logging.getLogger(__name__)
 
 
@@ -212,7 +215,13 @@ def _scrape_one(
         if consecutive_zero_new >= ZERO_NEW_PAGES_BEFORE_STOP:
             progress.stop_reason = f"{consecutive_zero_new} consecutive pages with no new records"
             return
-    progress.stop_reason = f"reached max_pages={max_pages}"
+    # The live client yields the first page plus up to ``max_pages`` more, so
+    # running out short of that means the source itself ended - a capture
+    # file whose last page was not empty, say - rather than the ceiling.
+    if len(progress.pages) > max_pages:
+        progress.stop_reason = f"reached max_pages={max_pages}"
+    else:
+        progress.stop_reason = STOP_SOURCE_ENDED
 
 
 def run_scrape(
@@ -222,10 +231,13 @@ def run_scrape(
     client: PageSource,
     max_pages: int,
     compress: bool = True,
+    extra_meta: Mapping[str, Any] | None = None,
 ) -> ScrapeResult:
     """Scrape each search in turn into one raw file plus a meta sidecar.
 
-    ``max_pages`` applies to each search separately.
+    ``max_pages`` applies to each search separately. ``extra_meta`` is merged
+    into the sidecar, for facts only the caller knows - where a capture file
+    came from and which of its pages were missing.
     """
     if not searches:
         raise ValueError("run_scrape needs at least one search")
@@ -244,6 +256,7 @@ def run_scrape(
         "max_pages": max_pages,
         "jobs_file": jobs_path.name,
         "compressed": compress,
+        **(extra_meta or {}),
     }
 
     def write_meta() -> None:

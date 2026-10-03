@@ -22,6 +22,10 @@ DEFAULT_MAX_PAGES = 500
 DEFAULT_RADIUS_MILES = 30.0
 DEFAULT_COMPRESS = True
 
+#: Where the capture extension's downloads land: Firefox's download directory
+#: plus the subdirectory the extension names in each download.
+DEFAULT_CAPTURE_DIR = "~/Downloads/hiringcafe-capture"
+
 #: A posting whose stated ceiling falls below this is rejected. Postings that
 #: state nothing are never rejected on compensation - they are a large and good
 #: slice of the results rather than noise.
@@ -338,6 +342,8 @@ class JobShortlistConfig:
     lets dedup and the seen store treat a job found by two searches as one."""
     scrape: ScrapeSettings
     screen: ScreenSettings = ScreenSettings()
+    capture_dir: Path = Path(DEFAULT_CAPTURE_DIR).expanduser()
+    """Where ``import`` looks for the newest browser capture by default."""
     visit_log_path: Path | None = None
     """VisitLogger export. Read by the diff stage for `opened` and `applied`
     labels, and by render to mark employers already applied to. Neither depends
@@ -380,6 +386,17 @@ def _screen_settings(data: dict[str, Any], path: Path) -> ScreenSettings:
     return settings
 
 
+def _capture_dir(data: dict[str, Any], path: Path) -> Path:
+    """Resolve [capture].dir. ``~`` expands; a relative path is config-relative."""
+    table = data.get("capture", {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [capture] must be a table")
+    raw = table.get("dir", DEFAULT_CAPTURE_DIR)
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError(f"{path}: [capture].dir must be a non-empty string")
+    return _resolve(str(Path(raw).expanduser()), path)
+
+
 def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
     """Load and validate ``config/job_shortlist.toml``."""
     data = _read_toml(path)
@@ -387,5 +404,6 @@ def load_job_shortlist_config(path: Path) -> JobShortlistConfig:
         searchstate_paths=_searchstate_paths(data, path),
         scrape=_scrape_settings(data, path),
         screen=_screen_settings(data, path),
+        capture_dir=_capture_dir(data, path),
         visit_log_path=_visit_log_path(data, path),
     )

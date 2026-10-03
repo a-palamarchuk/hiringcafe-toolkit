@@ -1,0 +1,46 @@
+{
+  "manifest_version": 2,
+  "name": "hiring.cafe capture",
+  "version": "0.1.0",
+  "description": "Saves the hiring.cafe search result pages you browse, for hiringcafe-toolkit import. Watches only: it never pages, clicks, or requests anything itself.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "hiringcafe-capture@hiringcafe-toolkit",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "downloads",
+    "storage",
+    "unlimitedStorage",
+    "*://hiringcafe.com/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://hiringcafe.com/classic*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_action": {
+    "default_title": "hiring.cafe capture",
+    "default_popup": "popup.html",
+    "default_icon": "icon.svg",
+    "default_area": "navbar"
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  }
+}

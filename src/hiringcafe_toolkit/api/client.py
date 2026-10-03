@@ -34,6 +34,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -84,6 +85,15 @@ class ResultPage:
 def compact_json(value: Any) -> str:
     """Serialize without whitespace, the way the site encodes searchState."""
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def search_url(search_state: Mapping[str, Any], base_url: str = BASE_URL) -> str:
+    """The search page URL a person opens to run ``search_state`` by hand.
+
+    Points at ``/classic`` directly rather than ``/``, which redirects there.
+    """
+    query = urlencode({"searchState": compact_json(search_state)})
+    return f"{base_url.rstrip('/')}/classic?{query}"
 
 
 def extract_next_data(html: str) -> JsonDict:

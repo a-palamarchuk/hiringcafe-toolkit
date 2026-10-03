@@ -27,12 +27,17 @@ Line length is 100.
 Two pipelines over hiring.cafe's undocumented job-search API, sharing a client and a scrape stage:
 
 - `api/client.py` - mimics the site's own frontend: reads the Next.js build id from the search
-  page, then pages through `/_next/data/<build_id>/index.json`, refreshing the build id if it goes
-  stale mid-run.
+  page, then pages through `/_next/data/<build_id>/<route>.json` (route taken from the page the
+  landing request rendered, currently `classic`), refreshing the build id if it goes stale
+  mid-run. A redirect payload is a stale build, never an empty page.
 - `common/` - config loading (`config.py`), JSONL read/write with transparent gzip (`jsonl.py`),
   the shared scrape stage (`scrape.py`, which depends on a `PageSource` protocol so tests never
   need HTTP), host normalization and domain matching (`urls.py`), careers-link derivation from
-  ATS apply URLs (`careers_link.py`), and geo distance (`location.py`).
+  ATS apply URLs (`careers_link.py`), geo distance (`location.py`), and a `PageSource` over
+  browser captures (`capture.py`).
+- `extensions/hiringcafe-capture/` - Firefox extension that saves result pages browsed by hand,
+  for days hiring.cafe serves the scraper a Cloudflare challenge. It must only observe (never
+  page, click or request); `job-shortlist import` replays its capture through the scrape stage.
 - `company_discovery/` - scrape -> rollup -> filter -> render. Unit is the company; filters are
   loose on purpose (a false negative costs a company you never hear about).
 - `job_shortlist/` - scrape -> normalize -> screen -> diff -> render. Unit is the posting; run
