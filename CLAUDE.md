@@ -36,8 +36,10 @@ Two pipelines over hiring.cafe's undocumented job-search API, sharing a client a
   ATS apply URLs (`careers_link.py`), geo distance (`location.py`), and a `PageSource` over
   browser captures (`capture.py`).
 - `extensions/hiringcafe-capture/` - Firefox extension that saves result pages browsed by hand,
-  for days hiring.cafe serves the scraper a Cloudflare challenge. It must only observe (never
-  page, click or request); `job-shortlist import` replays its capture through the scrape stage.
+  for days hiring.cafe serves the scraper a Cloudflare challenge. It must only observe: every
+  page request comes from the user (a click, or one Alt+N press clicking the site's own link) -
+  no timers, loops, or requests of its own. `job-shortlist import` replays its capture through
+  the scrape stage; a capture may differ from its configured search only in the fetch window.
 - `company_discovery/` - scrape -> rollup -> filter -> render. Unit is the company; filters are
   loose on purpose (a false negative costs a company you never hear about).
 - `job_shortlist/` - scrape -> normalize -> screen -> diff -> render. Unit is the posting; run

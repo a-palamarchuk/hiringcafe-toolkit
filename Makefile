@@ -32,8 +32,9 @@ shortlist:
 	uv run hiringcafe-toolkit job-shortlist diff
 	uv run hiringcafe-toolkit job-shortlist render
 
-# Links to open in Firefox when hiring.cafe blocks the scraper. Page through
-# each to the end with the capture extension loaded, then Save in its popup.
+# Links to open in Firefox when hiring.cafe blocks the scraper: a Daily set
+# (short window) and a Catch-up set (full window). Page through each with
+# Alt+N until the capture extension shows it Complete, then Save in its popup.
 urls:
 	uv run hiringcafe-toolkit job-shortlist urls
 

@@ -3,6 +3,7 @@
 from hiringcafe_toolkit.api.client import (
     BASE_URL,
     SSR_PAGE_LABEL,
+    BlockedError,
     HiringCafeClient,
     HiringCafeError,
     ResponseParseError,
@@ -19,6 +20,7 @@ from hiringcafe_toolkit.api.client import (
 __all__ = [
     "BASE_URL",
     "SSR_PAGE_LABEL",
+    "BlockedError",
     "HiringCafeClient",
     "HiringCafeError",
     "ResponseParseError",

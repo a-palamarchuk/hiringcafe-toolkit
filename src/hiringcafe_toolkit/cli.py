@@ -7,6 +7,7 @@ changing a filter should never mean re-scraping.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from datetime import datetime
@@ -15,7 +16,7 @@ from typing import Annotated
 
 import typer
 
-from hiringcafe_toolkit.api import HiringCafeClient, search_url
+from hiringcafe_toolkit.api import BlockedError, HiringCafeClient, HiringCafeError, search_url
 from hiringcafe_toolkit.common.capture import (
     CapturedSearch,
     CaptureError,
@@ -65,6 +66,26 @@ SHORTLIST_GLOB = "shortlist-*.jsonl*"
 JOBS_GLOB = "jobs-*.jsonl*"
 
 CAPTURE_GLOB = "capture-*.json"
+
+#: Fetch window of the daily capture links: the UI's "Past 24 hours", which the
+#: site pads to two days. Paging by hand makes the 21-day window's ~50 pages
+#: per search a chore; a daily capture only needs what arrived since yesterday.
+DAILY_WINDOW_DAYS = 2
+
+WINDOW_FIELD = "dateFetchedPastNDays"
+
+#: Printed when the site turns the scraper away, in place of a traceback.
+BLOCKED_ROUTINE = """\
+hiring.cafe is answering the scraper with a Cloudflare challenge today, so run the
+search by hand in Firefox and import what the capture extension saves:
+
+  1. Click the capture extension's toolbar icon, then Clear (twice).
+  2. make urls  - open the Daily links (Catch-up if you missed days).
+  3. On each, press Alt+N until the popup shows the search Complete.
+  4. Click the extension's icon, then Save.
+  5. make shortlist-import
+
+See "When the scraper is blocked" in the README."""
 
 #: A capture whose pages span longer than this probably mixes an earlier
 #: session's pages into today's. Paging through one search takes minutes.
@@ -399,14 +420,22 @@ def job_shortlist_scrape(
             # window loses postings that cannot be recovered on a later run.
             typer.echo(f"  Fetch window: {window} days")
 
-    with HiringCafeClient(delay_seconds=effective_delay) as client:
-        result = run_scrape(
-            searches,
-            out_dir,
-            client=client,
-            max_pages=effective_max_pages,
-            compress=compress,
-        )
+    try:
+        with HiringCafeClient(delay_seconds=effective_delay) as client:
+            result = run_scrape(
+                searches,
+                out_dir,
+                client=client,
+                max_pages=effective_max_pages,
+                compress=compress,
+            )
+    except BlockedError as exc:
+        typer.secho(f"\n{exc}", fg=typer.colors.RED, err=True)
+        typer.echo(BLOCKED_ROUTINE, err=True)
+        raise typer.Exit(code=3) from exc
+    except HiringCafeError as exc:
+        typer.secho(f"\nScrape failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
     _echo_scrape_result(result)
 
@@ -417,11 +446,12 @@ def job_shortlist_urls(
         Path, typer.Option("--config", "-c", help="Pipeline TOML config.")
     ] = SHORTLIST_CONFIG_PATH,
 ) -> None:
-    """Print the hiring.cafe link for each configured search, to run by hand.
+    """Print the hiring.cafe links for each configured search, to run by hand.
 
-    Opening these links rather than rebuilding a search in the UI guarantees
-    the browser runs exactly the configured searchState, which ``import``
-    requires.
+    Two sets: daily links with a short fetch window, for when the last run was
+    yesterday, and catch-up links with the configured window, for after missed
+    days. Opening these rather than rebuilding a search in the UI guarantees the
+    browser runs a searchState ``import`` accepts.
     """
     try:
         settings = load_job_shortlist_config(config)
@@ -430,17 +460,88 @@ def job_shortlist_urls(
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
 
-    for path, state in zip(settings.searchstate_paths, states, strict=True):
-        typer.echo(f"{path.stem}:")
-        typer.echo(f"  {search_url(state)}")
+    names = [path.stem for path in settings.searchstate_paths]
+    width = max(len(name) for name in names) + 1
+    typer.echo(
+        f"Daily (postings fetched in about the last {DAILY_WINDOW_DAYS} days - "
+        "use when the last run was yesterday):"
+    )
+    for name, state in zip(names, states, strict=True):
+        daily = {**state, WINDOW_FIELD: DAILY_WINDOW_DAYS}
+        typer.echo(f"  {name + ':':<{width}} {search_url(daily)}")
+    typer.echo("")
+    windows = sorted({w for s in states if isinstance(w := s.get(WINDOW_FIELD), int)})
+    configured = "/".join(str(w) for w in windows) or "configured"
+    typer.echo(f"Catch-up ({configured} days - use after missed days):")
+    for name, state in zip(names, states, strict=True):
+        typer.echo(f"  {name + ':':<{width}} {search_url(state)}")
+
+
+def _previous_run_finished(raw_dir: Path) -> datetime | None:
+    """When the newest successful raw run - scrape or import - finished.
+
+    Failed and empty runs are skipped: a blocked scrape leaves a meta behind,
+    and it must not count as the run a daily capture follows on from.
+    """
+    metas = sorted(raw_dir.glob("meta-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for meta_path in metas:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(meta, dict) or not meta.get("unique_records"):
+            continue
+        if "error" in meta or str(meta.get("stop_reason", "")).endswith("error"):
+            continue
+        finished = meta.get("finished_at")
+        if isinstance(finished, str):
+            try:
+                return datetime.fromisoformat(finished)
+            except ValueError:
+                continue
+    return None
+
+
+def _warn_on_missed_days(raw_dir: Path, captures: list[CapturedSearch]) -> None:
+    """Warn when the capture window does not reach back to the previous run.
+
+    A daily capture covers only a couple of days. If the last successful run
+    is older than that, postings fetched in between are in neither run, and
+    nothing downstream would notice.
+    """
+    previous = _previous_run_finished(raw_dir)
+    if previous is None:
+        return
+    for capture in captures:
+        window = capture.window_days
+        started = capture.first_captured
+        if window is None or started is None:
+            continue
+        gap_days = (started - previous).total_seconds() / 86_400
+        if gap_days > window:
+            typer.secho(
+                f"  The previous run finished {gap_days:.1f} days before this capture, longer "
+                f"than its {window}-day window: postings fetched in between may be missed. "
+                "Capture again with the Catch-up links from `make urls`.",
+                fg=typer.colors.YELLOW,
+            )
+            return
 
 
 def _echo_capture(name: str, capture: CapturedSearch) -> None:
     pages = capture.page_numbers
+    window = capture.window_days
     typer.echo(
         f"{name}: captured pages {pages[0]}-{pages[-1]} ({len(pages)}), "
         f"last page has {capture.last_page_records} records"
+        + (f", {window}-day window" if window is not None else "")
     )
+    if not capture.complete:
+        typer.secho(
+            f"  Last page not reached: postings after page {pages[-1]} are not in this import. "
+            "Page on to the end (until the popup shows Complete) and save again.",
+            fg=typer.colors.YELLOW,
+        )
     if capture.missing_pages:
         typer.secho(
             f"  Missing pages {capture.missing_pages}: their postings are not in this import. "
@@ -520,6 +621,7 @@ def job_shortlist_import(
     typer.echo("")
     for search, capture_entry in zip(searches, found, strict=True):
         _echo_capture(search.name, capture_entry)
+    _warn_on_missed_days(out_dir, found)
 
     result = run_scrape(
         searches,

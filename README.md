@@ -599,56 +599,79 @@ a shorter page when the `possible` section is too long to face.
 
 #### When the scraper is blocked: capturing in the browser
 
-Some days hiring.cafe answers the scraper with a Cloudflare challenge - HTTP 403, a
-`cf-mitigated: challenge` header, a "Just a moment..." page - and `scrape` fails on its first
-request. That is the site deciding to turn automated clients away, so the scraper does not try
-to get past it: no challenge solvers, no borrowed browser cookies. On those days the search is
-run by hand in Firefox instead, and a small extension saves the pages the browser receives.
+Some days hiring.cafe turns the scraper away with a Cloudflare challenge. `make shortlist` then
+stops at the scrape with *"hiring.cafe is answering the scraper with a Cloudflare challenge"*
+(exit code 3) and prints the routine below. On those days you run the searches yourself in
+Firefox, and a small extension saves the result pages as you page through them.
 
-The extension, in `extensions/hiringcafe-capture/`, only watches. It never pages, clicks, or
-requests anything itself, and passes every response through to the page unchanged. It saves
-each result page whole - the first page from the HTML, later ones from the `classic.json`
-requests "next page" makes - tagged with the searchState and page number from its URL.
-Finding the postings in a page is left to the same Python code the live client uses.
+**Quick start**
 
-**Install** it as a temporary add-on: `about:debugging` -> This Firefox -> Load Temporary
-Add-on -> `extensions/hiringcafe-capture/manifest.json`. Its button (a blue page icon) appears
-on the toolbar; Clear, Save, and the per-search counts are in the popup that button opens -
-nothing pops up by itself. Temporary add-ons are removed when Firefox restarts, taking any
-unsaved pages with them, so Save before closing Firefox and reload the add-on next session.
+1. **Load the extension** (once per Firefox session). Open `about:debugging`, choose
+   **This Firefox**, then **Load Temporary Add-on…**, and pick
+   `extensions/hiringcafe-capture/manifest.json`. Its blue page icon lives under the
+   puzzle-piece **Extensions** menu; to keep it in view, click the gear next to it and choose
+   **Pin to Toolbar**.
+2. **Start clean.** Click the blue icon, then **Clear**, then **Click again to clear**.
+3. **Open the searches.** Run `make urls`. It prints two sets of links:
+   - **Daily** - postings from about the last two days. Use these when the last run was
+     yesterday; they are a fraction of the pages.
+   - **Catch-up** - the full 21 days. Use these after missed days.
 
-**Each blocked day:**
-
-1. Click the extension's toolbar button and **Clear** in its popup (two clicks: the button
-   turns into "Click again to clear") to drop the previous session's pages.
-2. `make urls` prints a link per configured search. Open each - the links carry the exact
-   saved searchState, and import refuses a capture of anything else.
-3. Click **next page** through to the end of each search. The popup shows, per search, the
-   pages captured, any gaps, and the posting count on the last page; a short last page means
-   the end was reached.
-4. **Save** in the popup. The capture downloads to `~/Downloads/hiringcafe-capture/`
-   (`[capture].dir`) and appears in Firefox's Downloads panel.
-5. Run the rest from the capture:
+   Open one link per search (both searches, from the same set).
+4. **Page through each search** by pressing **Alt+N**, which clicks the site's "Next page" link
+   for you - one page per press. Keep going until the extension's popup shows the search as
+   **Complete**; the icon's badge turns green once every search is.
+5. **Save.** Click the blue icon, then **Save**. The capture lands in
+   `~/Downloads/hiringcafe-capture/`.
+6. **Build the shortlist** from it:
 
    ```bash
    make shortlist-import
    ```
 
-   which is `job-shortlist import` - writing the same `jobs-*.jsonl.gz` and meta a scrape
-   writes, from the newest capture - followed by the usual four stages.
+   Read any yellow warnings it prints before trusting the page (see below).
 
-What import checks, because each of these would otherwise produce a run that looks complete:
+Temporary add-ons disappear when Firefox restarts, along with any pages not yet saved - so Save
+before closing Firefox. Alt+N can be changed in `about:addons` -> gear -> **Manage Extension
+Shortcuts**.
+
+**What the extension does, and does not do.** It only watches. Every page request comes from
+you - a click or one Alt+N press - and the extension never pages, clicks, or requests anything
+on its own; that would make it an automated client using your session to get past a check the
+site applies on purpose, which is also why the scraper never tries to get past the challenge
+itself. It saves each result page whole - the first page from the HTML, later ones from the
+`classic.json` requests "Next page" makes - tagged with the searchState and page number from
+its URL, and notes when a search's "Next page" link disappears, which is how it knows the last
+page was reached. Finding the postings in a page is left to the same Python code the live
+client uses.
+
+**What `make shortlist-import` checks.** `job-shortlist import` writes the same
+`jobs-*.jsonl.gz` and meta a scrape writes, from the newest capture, then the usual four stages
+run. Each check below catches something that would otherwise produce a run that looks
+complete:
 
 - **Every configured search must be in the capture.** A missing one stops the import; the diff
   would otherwise report nothing new for it.
-- **Only an identical searchState matches.** Captures of other searches - anything browsed
-  with the extension loaded - are skipped with a warning naming them.
-- **Gaps are reported**, with the missing page numbers, and recorded in the meta under
-  `captures`. A page the browser served from its cache never reaches the extension; reload it.
+- **A capture matches a configured search only if their searchStates are identical apart from
+  the fetch window**, so a daily capture counts for its search. Anything else browsed with the
+  extension loaded is skipped with a warning naming it.
+- **"Last page not reached"** - the search was not paged to the end, so later postings are
+  missing. Page on and save again.
+- **"Missing pages"** - a page in the middle was not captured, usually one the browser served
+  from its cache. Reload it and save again.
+- **"Postings fetched in between may be missed"** - the previous successful run is older than
+  the capture's window, so a daily capture does not reach back to it. Capture again with the
+  Catch-up links.
 - **Pages captured over more than six hours** are flagged as a likely uncleared earlier session.
 
-The site's reported total is not a completeness check here or anywhere: it counts duplicate
-listings, measured at 4326 reported against 2347 unique records on one run.
+Every capture's details - window, pages, gaps, completeness - are recorded in the meta under
+`captures`. The site's reported total is not a completeness check here or anywhere: it counts
+duplicate listings, measured at 4326 reported against 2347 unique records on one run.
+
+**If something goes wrong.** In `about:debugging`, click **Inspect** next to the extension
+and look at its **Console**. A popup that stays empty while you page means the pages are not
+reaching the extension; Alt+N doing nothing on a search page usually means the page had not
+finished loading - a short message in the page's corner says which.
 
 **On compression.** Raw records gzip about 7x, since they are mostly repeated JSON keys. Company
 discovery runs occasionally and leaves its output plain; this pipeline runs daily and keeps every

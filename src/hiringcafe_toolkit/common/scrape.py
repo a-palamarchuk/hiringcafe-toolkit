@@ -224,6 +224,17 @@ def _scrape_one(
         progress.stop_reason = STOP_SOURCE_ENDED
 
 
+def _drop_if_empty(jobs_path: Path, written_keys: set[str], progress: Sequence[_Progress]) -> None:
+    """Remove a failed run's records file when nothing was written to it.
+
+    Later stages default to the newest raw file, so an empty one left behind by
+    a run that failed on its first request would be picked up as a day with no
+    postings. The meta sidecar stays as the record of the failure.
+    """
+    if not written_keys and not any(p.keyless for p in progress):
+        jobs_path.unlink(missing_ok=True)
+
+
 def run_scrape(
     searches: Sequence[Search],
     out_dir: Path,
@@ -267,6 +278,8 @@ def run_scrape(
         meta["stop_reason"] = _overall_stop_reason(progress)
         if error is not None:
             meta["error"] = error
+        if not jobs_path.exists():
+            meta["jobs_file"] = None  # dropped as empty after a failure
         meta["searches"] = [p.as_meta() for p in progress]
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -278,11 +291,13 @@ def run_scrape(
     except HiringCafeError as exc:
         progress[-1].stop_reason = "error"
         error = f"{progress[-1].search.name}: {exc}" if len(searches) > 1 else str(exc)
+        _drop_if_empty(jobs_path, written_keys, progress)
         write_meta()
         raise
     except KeyboardInterrupt:
         if progress:
             progress[-1].stop_reason = "interrupted"
+        _drop_if_empty(jobs_path, written_keys, progress)
         write_meta()
         raise
 

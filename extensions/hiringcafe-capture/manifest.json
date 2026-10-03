@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "hiring.cafe capture",
-  "version": "0.1.0",
-  "description": "Saves the hiring.cafe search result pages you browse, for hiringcafe-toolkit import. Watches only: it never pages, clicks, or requests anything itself.",
+  "version": "0.2.0",
+  "description": "Saves the hiring.cafe search result pages you browse, for hiringcafe-toolkit import. Watches only: it never pages on its own; Alt+N clicks the site's next-page link once per keypress.",
   "browser_specific_settings": {
     "gecko": {
       "id": "hiringcafe-capture@hiringcafe-toolkit",
@@ -42,5 +42,13 @@
   "icons": {
     "48": "icon.svg",
     "96": "icon.svg"
+  },
+  "commands": {
+    "next-page": {
+      "suggested_key": {
+        "default": "Alt+N"
+      },
+      "description": "Click hiring.cafe's \"Next page\" link (one page per keypress)"
+    }
   }
 }

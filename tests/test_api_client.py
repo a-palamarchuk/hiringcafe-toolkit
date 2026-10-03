@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from hiringcafe_toolkit.api.client import (
+    BlockedError,
     HiringCafeClient,
     HiringCafeError,
     ResponseParseError,
@@ -194,6 +195,36 @@ def test_a_redirect_payload_is_never_read_as_an_empty_page() -> None:
 
     with make_client(handler) as api, pytest.raises(HiringCafeError, match="went stale"):
         list(api.iter_pages({}, max_pages=5))
+
+
+def test_a_cloudflare_challenge_is_reported_as_blocked() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403, headers={"cf-mitigated": "challenge"}, html="<title>Just a moment...</title>"
+        )
+
+    with make_client(handler) as api, pytest.raises(BlockedError, match="Cloudflare challenge"):
+        api.fetch_landing_page("{}")
+
+
+def test_a_challenge_mid_run_is_reported_as_blocked() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "_next/data" in request.url.path:
+            return httpx.Response(403, headers={"cf-mitigated": "challenge"})
+        return httpx.Response(200, html=landing_html("b", {"ssrHits": records("a")}))
+
+    with make_client(handler) as api, pytest.raises(BlockedError):
+        list(api.iter_pages({}, max_pages=5))
+
+
+def test_a_plain_403_is_not_reported_as_a_challenge() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    with make_client(handler) as api, pytest.raises(HiringCafeError) as raised:
+        api.fetch_landing_page("{}")
+
+    assert not isinstance(raised.value, BlockedError)
 
 
 # ----- resilience --------------------------------------------------------

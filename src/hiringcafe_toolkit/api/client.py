@@ -70,6 +70,19 @@ class ResponseParseError(HiringCafeError):
     """A response arrived but did not have the expected shape."""
 
 
+class BlockedError(HiringCafeError):
+    """The site answered with a Cloudflare challenge: it is turning automated clients away.
+
+    Not retried and not worked around. The pipeline's answer is a capture made
+    by hand in the browser (see ``common.capture``).
+    """
+
+
+def _raise_if_challenged(response: httpx.Response, what: str) -> None:
+    if response.status_code == 403 and response.headers.get("cf-mitigated") == "challenge":
+        raise BlockedError(f"{what} returned a Cloudflare challenge (HTTP 403)")
+
+
 @dataclass(frozen=True)
 class ResultPage:
     """One page of search results."""
@@ -239,6 +252,7 @@ class HiringCafeClient:
     def fetch_landing_page(self, search_state_json: str) -> JsonDict:
         """Fetch the search page and return its parsed ``__NEXT_DATA__`` blob."""
         response = self._get(self.base_url + "/", {"searchState": search_state_json})
+        _raise_if_challenged(response, "landing page")
         if response.status_code != 200:
             raise HiringCafeError(f"landing page returned HTTP {response.status_code}")
         return extract_next_data(response.text)
@@ -253,6 +267,7 @@ class HiringCafeClient:
             {"searchState": search_state_json, "page": page},
             {"x-nextjs-data": "1"},
         )
+        _raise_if_challenged(response, f"data route page {page}")
         if response.status_code == 404:
             raise StaleBuildIdError(f"build id {build_id} rejected for page {page}")
         if response.status_code != 200:

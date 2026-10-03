@@ -3,8 +3,9 @@
 // Saves hiring.cafe search result pages as the browser receives them, for
 // `hiringcafe-toolkit job-shortlist import`.
 //
-// It only watches. Paging is done by the person at the keyboard; this script
-// never requests, clicks, or scrolls anything, and passes every response
+// It only watches. Paging is done by the person at the keyboard - by clicking
+// "Next page" or pressing Alt+N, which clicks it once per keypress. Nothing
+// here requests, clicks, or scrolls on its own, and every response passes
 // through to the page unchanged.
 //
 // Each page is stored whole under its searchState and page number, so the
@@ -12,6 +13,7 @@
 
 const FORMAT = "hiringcafe-capture/1";
 const PAGE_PREFIX = "page:";
+const END_PREFIX = "end:";
 
 // "Next page" fetches /_next/data/<build id>/classic.json?searchState=...&page=N.
 const DATA_ROUTE = "*://hiringcafe.com/_next/data/*/classic.json*";
@@ -55,44 +57,6 @@ function recordCount(payload) {
   return Array.isArray(hits) ? hits.length : 0;
 }
 
-async function storePage({ url, source, buildId, payload }) {
-  const props = payload?.pageProps;
-  // A moved page answers with a redirect and no records. Stored, it would
-  // read as the end of the results.
-  if (!props || typeof props !== "object" || "__N_REDIRECT" in props) {
-    return;
-  }
-  const where = parseLocation(url);
-  if (!where) {
-    return;
-  }
-  const key = `${PAGE_PREFIX}${canonical(where.searchState)}#${where.page}`;
-  await browser.storage.local.set({
-    [key]: {
-      url,
-      searchState: where.searchState,
-      page: where.page,
-      source,
-      build_id: buildId,
-      captured_at: new Date().toISOString(),
-      payload,
-    },
-  });
-  await updateBadge();
-}
-
-async function allPages() {
-  const items = await browser.storage.local.get(null);
-  return Object.entries(items)
-    .filter(([key]) => key.startsWith(PAGE_PREFIX))
-    .map(([, page]) => page);
-}
-
-async function updateBadge() {
-  const count = (await allPages()).length;
-  await browser.browserAction.setBadgeText({ text: count ? String(count) : "" });
-}
-
 /** A short, recognizable label for a search in the popup. */
 function describe(state) {
   const location = state.locations?.[0];
@@ -110,16 +74,95 @@ function describe(state) {
   return parts.join(" · ");
 }
 
-async function summarize() {
-  const groups = new Map();
-  for (const page of await allPages()) {
-    const key = canonical(page.searchState);
-    if (!groups.has(key)) {
-      groups.set(key, { label: describe(page.searchState), pages: [] });
+// ----- in-memory index -----------------------------------------------------
+//
+// Storage holds whole payloads - tens of megabytes for a full capture - so the
+// badge and popup read this index of what they need rather than storage
+// itself. Storage is read in full only once at startup and again on Save.
+
+/** storage key -> { stateKey, label, page, records } */
+const pageIndex = new Map();
+/** stateKey -> { searchState, page, reason } */
+const endIndex = new Map();
+
+function indexEntry(entry) {
+  return {
+    stateKey: canonical(entry.searchState),
+    label: describe(entry.searchState),
+    page: entry.page,
+    records: recordCount(entry.payload),
+  };
+}
+
+const ready = (async () => {
+  const items = await browser.storage.local.get(null);
+  for (const [key, value] of Object.entries(items)) {
+    if (key.startsWith(PAGE_PREFIX)) {
+      pageIndex.set(key, indexEntry(value));
+    } else if (key.startsWith(END_PREFIX)) {
+      endIndex.set(canonical(value.searchState), value);
     }
-    groups.get(key).pages.push(page);
   }
-  return [...groups.values()].map(({ label, pages }) => {
+  await updateBadge();
+})();
+
+// ----- capture -------------------------------------------------------------
+
+async function storePage({ url, source, buildId, payload }) {
+  const props = payload?.pageProps;
+  // A moved page answers with a redirect and no records. Stored, it would
+  // read as the end of the results.
+  if (!props || typeof props !== "object" || "__N_REDIRECT" in props) {
+    return;
+  }
+  const where = parseLocation(url);
+  if (!where) {
+    return;
+  }
+  await ready;
+  const key = `${PAGE_PREFIX}${canonical(where.searchState)}#${where.page}`;
+  const entry = {
+    url,
+    searchState: where.searchState,
+    page: where.page,
+    source,
+    build_id: buildId,
+    captured_at: new Date().toISOString(),
+    payload,
+  };
+  await browser.storage.local.set({ [key]: entry });
+  pageIndex.set(key, indexEntry(entry));
+  await updateBadge();
+}
+
+/** The search's last page, as seen by the content script: no "Next page" link. */
+async function storeEnd(url) {
+  if (typeof url !== "string" || !url.startsWith("https://hiringcafe.com/")) {
+    return;
+  }
+  const where = parseLocation(url);
+  if (!where) {
+    return;
+  }
+  await ready;
+  const stateKey = canonical(where.searchState);
+  const end = { searchState: where.searchState, page: where.page, reason: "no next page link" };
+  await browser.storage.local.set({ [`${END_PREFIX}${stateKey}`]: end });
+  endIndex.set(stateKey, end);
+  await updateBadge();
+}
+
+// ----- summary, badge, save, clear -----------------------------------------
+
+function summarize() {
+  const groups = new Map();
+  for (const item of pageIndex.values()) {
+    if (!groups.has(item.stateKey)) {
+      groups.set(item.stateKey, { label: item.label, end: endIndex.get(item.stateKey), pages: [] });
+    }
+    groups.get(item.stateKey).pages.push(item);
+  }
+  return [...groups.values()].map(({ label, end, pages }) => {
     pages.sort((a, b) => a.page - b.page);
     const numbers = new Set(pages.map((page) => page.page));
     const last = pages[pages.length - 1];
@@ -129,16 +172,30 @@ async function summarize() {
         missing.push(n);
       }
     }
+    // The same two end signals the importer accepts: the "Next page" link
+    // gone on a captured page, or a captured page with no results.
+    const emptyLast = last.records === 0;
+    const complete = emptyLast || (end !== undefined && last.page === end.page);
     return {
       label,
+      complete,
+      endReason: emptyLast ? "empty page" : (end?.reason ?? null),
       firstPage: pages[0].page,
       lastPage: last.page,
       pageCount: pages.length,
       missing,
-      records: pages.reduce((sum, page) => sum + recordCount(page.payload), 0),
-      lastPageRecords: recordCount(last.payload),
+      records: pages.reduce((sum, page) => sum + page.records, 0),
+      lastPageRecords: last.records,
     };
   });
+}
+
+/** Page count on the badge; green once every captured search reached its last page. */
+async function updateBadge() {
+  const searches = summarize();
+  const done = searches.length > 0 && searches.every((search) => search.complete);
+  await browser.browserAction.setBadgeText({ text: pageIndex.size ? String(pageIndex.size) : "" });
+  await browser.browserAction.setBadgeBackgroundColor({ color: done ? "#1a7f37" : "#0a84ff" });
 }
 
 function localStamp(date) {
@@ -150,12 +207,17 @@ function localStamp(date) {
 }
 
 async function save() {
-  const pages = await allPages();
+  await ready;
+  const items = await browser.storage.local.get(null);
+  const pages = Object.entries(items)
+    .filter(([key]) => key.startsWith(PAGE_PREFIX))
+    .map(([, page]) => page);
   if (!pages.length) {
     return { saved: false, message: "Nothing captured yet." };
   }
   pages.sort((a, b) => a.captured_at.localeCompare(b.captured_at));
-  const body = JSON.stringify({ format: FORMAT, saved_at: new Date().toISOString(), pages });
+  const ends = [...endIndex.values()];
+  const body = JSON.stringify({ format: FORMAT, saved_at: new Date().toISOString(), pages, ends });
   const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
   const filename = `hiringcafe-capture/capture-${localStamp(new Date())}.json`;
   try {
@@ -168,12 +230,15 @@ async function save() {
 }
 
 async function clear() {
-  const keys = Object.keys(await browser.storage.local.get(null)).filter((key) =>
-    key.startsWith(PAGE_PREFIX),
-  );
+  await ready;
+  const keys = [...pageIndex.keys(), ...[...endIndex.keys()].map((key) => END_PREFIX + key)];
   await browser.storage.local.remove(keys);
+  pageIndex.clear();
+  endIndex.clear();
   await updateBadge();
 }
+
+// ----- wiring --------------------------------------------------------------
 
 browser.webRequest.onBeforeRequest.addListener(
   (details) => {
@@ -218,8 +283,12 @@ browser.runtime.onMessage.addListener((message, sender) => {
         buildId: message.buildId,
         payload: message.payload,
       });
+    case "page-state":
+      // The page's own current address: the site's "Next page" changes it
+      // without a reload, and sender.url stays at the address the tab loaded.
+      return message.atEnd ? storeEnd(message.url) : undefined;
     case "summary":
-      return summarize();
+      return ready.then(summarize);
     case "save":
       return save();
     case "clear":
@@ -229,4 +298,16 @@ browser.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
-updateBadge().catch(console.error);
+// Alt+N (changeable in about:addons -> Manage Extension Shortcuts). Forwarded to
+// the page, which clicks the site's own "Next page" link: one click per keypress.
+browser.commands.onCommand.addListener(async (command) => {
+  if (command !== "next-page") {
+    return;
+  }
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url?.startsWith("https://hiringcafe.com/")) {
+    return;
+  }
+  // No content script on the page (not a search page) rejects; nothing to do.
+  browser.tabs.sendMessage(tab.id, { type: "next-page" }).catch(() => {});
+});

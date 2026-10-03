@@ -184,6 +184,17 @@ def test_partial_results_and_meta_survive_a_failure(tmp_path: Path) -> None:
     assert meta["error"] == "boom"
 
 
+def test_a_failure_before_any_record_leaves_no_records_file(tmp_path: Path) -> None:
+    """Later stages take the newest raw file; an empty one would read as a quiet day."""
+    with pytest.raises(HiringCafeError):
+        run(tmp_path, StubClient([], error=HiringCafeError("blocked")))
+
+    assert list(tmp_path.glob("jobs-*")) == []
+    meta = read_meta(next(iter(tmp_path.glob("meta-*.json"))))
+    assert meta["error"] == "blocked"
+    assert meta["jobs_file"] is None
+
+
 def test_output_directory_is_created(tmp_path: Path) -> None:
     target = tmp_path / "deep" / "raw"
     result = run_scrape(

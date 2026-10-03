@@ -10,6 +10,7 @@
         --muted: #59636e;
         --line: #d1d9e0;
         --warn: #9a6700;
+        --done: #1a7f37;
         --button: #f6f8fa;
       }
       @media (prefers-color-scheme: dark) {
@@ -19,6 +20,7 @@
           --muted: #9198a1;
           --line: #3d444d;
           --warn: #d29922;
+          --done: #3fb950;
           --button: #2b2a33;
         }
       }
@@ -46,6 +48,10 @@
       }
       .warn {
         color: var(--warn);
+      }
+      .done {
+        color: var(--done);
+        font-weight: 600;
       }
       .empty {
         color: var(--muted);

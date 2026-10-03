@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from typer.testing import CliRunner
 
-from hiringcafe_toolkit.api import search_url
+from hiringcafe_toolkit.api import BlockedError, search_url
 from hiringcafe_toolkit.cli import app
 from hiringcafe_toolkit.common.capture import (
     CAPTURE_FORMAT,
@@ -161,14 +161,87 @@ def test_malformed_captures_are_refused(tmp_path: Path, body: str, message: str)
 # ----- matching and serving -----------------------------------------------
 
 
-def test_only_an_identical_search_state_matches(tmp_path: Path) -> None:
-    near = {**REMOTE, "dateFetchedPastNDays": 14}
-    path = write_capture(tmp_path / "c.json", entry(near, 0, "a"), entry(LOCAL, 0, "b"))
+def test_a_capture_may_differ_from_its_search_only_in_the_window(tmp_path: Path) -> None:
+    daily = {**REMOTE, "dateFetchedPastNDays": 2}
+    other = {**REMOTE, "workplaceTypes": ["Hybrid"]}
+    path = write_capture(tmp_path / "c.json", entry(daily, 0, "a"), entry(other, 0, "b"))
 
     matched, unmatched = match_captures([LOCAL, REMOTE], load_capture(path))
 
-    assert matched[0] is not None and matched[1] is None
-    assert [c.search_state for c in unmatched] == [near]
+    assert matched[0] is None
+    assert matched[1] is not None and matched[1].window_days == 2
+    assert [c.search_state for c in unmatched] == [other]
+
+
+def test_the_wider_window_wins_when_a_search_was_captured_twice(tmp_path: Path) -> None:
+    daily = {**REMOTE, "dateFetchedPastNDays": 2}
+    path = write_capture(tmp_path / "c.json", entry(daily, 0, "a"), entry(REMOTE, 0, "b"))
+
+    matched, unmatched = match_captures([REMOTE], load_capture(path))
+
+    assert matched[0] is not None and matched[0].window_days == 21
+    assert [c.window_days for c in unmatched] == [2]
+
+
+def test_a_daily_capture_is_served_for_its_configured_search(tmp_path: Path) -> None:
+    daily = {**REMOTE, "dateFetchedPastNDays": 2}
+    path = write_capture(tmp_path / "c.json", entry(daily, 0, "a"), entry(daily, 1, "b"))
+    matched, _ = match_captures([REMOTE], load_capture(path))
+    source = CapturePageSource([c for c in matched if c is not None])
+
+    result = run_scrape(
+        [Search("remote", REMOTE)], tmp_path / "raw", client=source, max_pages=5, compress=False
+    )
+
+    assert [r["objectID"] for r in read_jsonl(result.jobs_path)] == ["a", "b"]
+
+
+# ----- end of results ------------------------------------------------------
+
+
+def write_capture_with_end(path: Path, end_page: int, *pages: JsonDict) -> Path:
+    write_capture(path, *pages)
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body["ends"] = [{"searchState": REMOTE, "page": end_page, "reason": "no next page link"}]
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+def test_a_capture_reaching_the_recorded_end_is_complete(tmp_path: Path) -> None:
+    path = write_capture_with_end(
+        tmp_path / "c.json", 1, entry(REMOTE, 0, "a"), entry(REMOTE, 1, "b")
+    )
+    [capture] = load_capture(path)
+
+    assert capture.complete
+    assert capture.summary()["end"] == {"page": 1, "reason": "no next page link"}
+
+
+def test_an_end_below_the_last_captured_page_is_not_trusted(tmp_path: Path) -> None:
+    """An end recorded on page 0 with pages beyond it is a bad record, not an end."""
+    path = write_capture_with_end(
+        tmp_path / "c.json", 0, entry(REMOTE, 0, "a"), entry(REMOTE, 1, "b")
+    )
+    [capture] = load_capture(path)
+
+    assert not capture.complete
+
+
+def test_a_capture_without_an_end_is_incomplete(tmp_path: Path) -> None:
+    [capture] = load_capture(
+        write_capture(tmp_path / "c.json", entry(REMOTE, 0, "a"), entry(REMOTE, 1, "b"))
+    )
+
+    assert not capture.complete
+
+
+def test_an_empty_last_page_is_an_end_too(tmp_path: Path) -> None:
+    """The live scraper's own end signal, in case the link check missed it."""
+    [capture] = load_capture(
+        write_capture(tmp_path / "c.json", entry(REMOTE, 0, "a"), entry(REMOTE, 1))
+    )
+
+    assert capture.complete
 
 
 def test_captured_pages_scrape_like_live_ones(tmp_path: Path) -> None:
@@ -284,11 +357,112 @@ def test_import_skips_other_searches_and_warns_about_gaps(tmp_path: Path) -> Non
     assert [r["objectID"] for r in read_jsonl(jobs)] == ["a", "b", "c"]
 
 
-def test_urls_prints_one_link_per_search(tmp_path: Path) -> None:
+def test_urls_prints_daily_and_catch_up_links(tmp_path: Path) -> None:
     config = write_config(tmp_path)
 
     result = invoke("urls", "--config", str(config))
 
     assert result.exit_code == 0, result.output
-    assert search_url(LOCAL) in result.output
-    assert search_url(REMOTE) in result.output
+    daily, catch_up = result.output.split("Catch-up")
+    assert "Daily" in daily
+    for state in (LOCAL, REMOTE):
+        assert search_url({**state, "dateFetchedPastNDays": 2}) in daily
+        assert search_url(state) in catch_up
+
+
+def test_import_warns_about_an_incomplete_search(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    capture = write_capture_with_end(
+        tmp_path / "c.json", 1, entry(LOCAL, 0, "a"), entry(REMOTE, 0, "b")
+    )
+
+    result = invoke("import", str(capture), "--config", str(config), "--out-dir", str(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    # LOCAL has no recorded end; REMOTE's end is page 1, which was not captured.
+    assert result.output.count("Last page not reached") == 2
+
+
+def write_previous_meta(raw: Path, finished_at: str, **fields: Any) -> None:
+    raw.mkdir(parents=True, exist_ok=True)
+    meta = {"finished_at": finished_at, "unique_records": 10, "stop_reason": "empty page"}
+    (raw / f"meta-{finished_at[:10]}.json").write_text(
+        json.dumps({**meta, **fields}), encoding="utf-8"
+    )
+
+
+def daily_capture(tmp_path: Path, captured_at: str) -> Path:
+    local, remote = ({**s, "dateFetchedPastNDays": 2} for s in (LOCAL, REMOTE))
+    return write_capture(
+        tmp_path / "c.json",
+        entry(local, 0, "a", captured_at=captured_at),
+        entry(remote, 0, "b", captured_at=captured_at),
+    )
+
+
+def test_import_warns_when_a_daily_capture_misses_days(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    raw = tmp_path / "raw"
+    write_previous_meta(raw, "2026-09-28T10:00:00+00:00")
+    capture = daily_capture(tmp_path, "2026-10-02T10:00:00Z")
+
+    result = invoke("import", str(capture), "--config", str(config), "--out-dir", str(raw))
+
+    assert result.exit_code == 0, result.output
+    assert "longer than its 2-day window" in result.output
+
+
+def test_import_does_not_warn_after_yesterdays_run(tmp_path: Path) -> None:
+    config = write_config(tmp_path)
+    raw = tmp_path / "raw"
+    write_previous_meta(raw, "2026-10-01T10:00:00+00:00")
+    capture = daily_capture(tmp_path, "2026-10-02T10:00:00Z")
+
+    result = invoke("import", str(capture), "--config", str(config), "--out-dir", str(raw))
+
+    assert result.exit_code == 0, result.output
+    assert "may be missed" not in result.output
+
+
+def test_a_failed_run_is_not_the_previous_run(tmp_path: Path) -> None:
+    """A blocked scrape leaves a meta; the daily capture follows the run before it."""
+    config = write_config(tmp_path)
+    raw = tmp_path / "raw"
+    write_previous_meta(raw, "2026-09-28T10:00:00+00:00")
+    write_previous_meta(raw, "2026-10-01T10:00:00+00:00", unique_records=0, error="blocked")
+    os.utime(raw / "meta-2026-09-28.json", (1_000, 1_000))
+    os.utime(raw / "meta-2026-10-01.json", (2_000, 2_000))
+    capture = daily_capture(tmp_path, "2026-10-02T10:00:00Z")
+
+    result = invoke("import", str(capture), "--config", str(config), "--out-dir", str(raw))
+
+    assert "may be missed" in result.output
+
+
+def test_scrape_prints_the_capture_routine_when_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class BlockedClient:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def __enter__(self) -> BlockedClient:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def iter_pages(self, search_state: Any, max_pages: int) -> Any:
+            raise BlockedError("landing page returned a Cloudflare challenge (HTTP 403)")
+            yield  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr("hiringcafe_toolkit.cli.HiringCafeClient", BlockedClient)
+    config = write_config(tmp_path)
+    raw = tmp_path / "raw"
+
+    result = invoke("scrape", "--config", str(config), "--out-dir", str(raw))
+
+    assert result.exit_code == 3
+    assert "make shortlist-import" in result.output
+    assert list(raw.glob("jobs-*")) == []
+    assert len(list(raw.glob("meta-*.json"))) == 1

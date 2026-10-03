@@ -34,6 +34,11 @@ async function render() {
     if (search.missing.length) {
       box.append(line("warn", `Missing pages: ${search.missing.join(", ")}`));
     }
+    box.append(
+      search.complete
+        ? line("done", `Complete - last page reached (${search.endReason})`)
+        : line("detail", "In progress - press Alt+N for the next page"),
+    );
     searchesBox.append(box);
   }
 }
